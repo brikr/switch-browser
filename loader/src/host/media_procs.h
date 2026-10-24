@@ -4,8 +4,8 @@
 // initialise without them. The peers copy 0x1e0 bytes (core_0: 60 callbacks) / 0x228 bytes
 // (core_3: 69); the only struct definition available is 3.30.3's 70-entry one, so this builds a
 // raw table of the size the binary copies instead.
-//   slot 0: fInitializeProc -> true; every other slot: a stub returning 0 that logs its index
-// (with NXB_TRACE=1), until real media support exists.
+//   slot 0: fInitializeProc -> true; core_3: a null player whose loads fail with a format error;
+// every other slot: a stub returning 0, reported through stub_report.h. No real playback yet.
 
 namespace nxb {
 

@@ -4,7 +4,10 @@
 // the generated no-op stubs (build/generated/stub_clients.h).
 
 #include <functional>
+#include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "cfi_gate.h"
 #include "generated/stub_clients.h"
@@ -17,6 +20,7 @@ struct ViewConfig {
     std::string user_agent;
     bool handheld = false;  // device mode for the Switch-specific media feature (false = docked/console)
     std::string language = "en-US";  // navigator.language
+    std::string user_style_sheet;    // URL (usually data:) of the user style sheet, or empty
 };
 
 // Events the embedding application cares about.
@@ -41,6 +45,11 @@ public:
     WKCFloatRect pageRect() override;
     void addMessageToConsole(WKC::MessageSource, WKC::MessageType, WKC::MessageLevel level, const WKC::String& message,
                              unsigned int lineNumber, const WKC::String& sourceID) override;
+#if NXB_CORE == 3
+    void addMessageWithArgumentsToConsole(WKC::MessageSource, WKC::MessageLevel level, const WKC::String& message,
+                                          const std::vector<WKC::String>& arguments, unsigned int lineNumber,
+                                          unsigned columnNumber, const WKC::String& sourceID) override;
+#endif
     void runJavaScriptAlert(WKC::Frame*, const WKC::String& message) override;
     bool runJavaScriptConfirm(WKC::Frame*, const WKC::String& message) override;
     bool runJavaScriptPrompt(WKC::Frame*, const WKC::String& message, const WKC::String& defaultValue,
@@ -59,6 +68,18 @@ public:
     unsigned int underlayColor() const override { return 0xFFFFFFFF; }
 
 private:
+    // core_3 reports a console API call twice: addMessageToConsole with the first argument as
+    // text, then addMessageWithArgumentsToConsole with the rest. The first is held here until the
+    // second replaces it (or, failing that, until the run loop flushes it).
+    struct PendingConsole {
+        bool active = false;
+        std::string message, source;
+        unsigned line = 0;
+        int level = 0;
+    };
+    void flush_console();
+    PendingConsole pending_console_;
+
     const ViewConfig& config_;
     ViewEvents& events_;
 };
@@ -120,7 +141,17 @@ public:
     void dispatchDidCommitLoad() override {
         if (events_.location_changed) events_.location_changed();
     }
+    // Same-document navigations: fragment changes and the History API (push/replace/back/forward).
     void dispatchDidChangeLocationWithinPage() override {
+        if (events_.location_changed) events_.location_changed();
+    }
+    void dispatchDidPushStateWithinPage() override {
+        if (events_.location_changed) events_.location_changed();
+    }
+    void dispatchDidReplaceStateWithinPage() override {
+        if (events_.location_changed) events_.location_changed();
+    }
+    void dispatchDidPopStateWithinPage() override {
         if (events_.location_changed) events_.location_changed();
     }
     void dispatchDidFinishLoad() override;
@@ -139,6 +170,60 @@ private:
 class HostEditorClient : public WKC::StubEditorClientIf {
 public:
     void handleKeyboardEvent(WKC::KeyboardEvent* event) override;
+};
+
+// Web Storage (localStorage / sessionStorage) for one origin. The engine keeps no storage itself;
+// without a working client sessionStorage drops every write and localStorage is null. Items live in
+// memory, shared by every area created for the same origin and type (so they survive navigations
+// within this process), and are lost on exit.
+class HostStorageArea : public WKC::StubStorageAreaIf {
+public:
+    using Items = std::map<std::u16string, std::u16string>;
+    HostStorageArea(std::shared_ptr<Items> items, unsigned quota) : items_(std::move(items)), quota_(quota) {}
+
+    unsigned length() override { return static_cast<unsigned>(items_->size()); }
+    WKC::String key(unsigned index) override;
+    WKC::String item(const WKC::String& key) override;
+    void setItem(WKC::Frame*, const WKC::String& key, const WKC::String& value, bool& quotaException) override;
+    void removeItem(WKC::Frame*, const WKC::String& key) override { items_->erase(to_u16(key)); }
+    void clear(WKC::Frame*) override { items_->clear(); }
+    bool contains(const WKC::String& key) override { return items_->count(to_u16(key)) != 0; }
+#if NXB_CORE == 0
+    bool canAccessStorage(WKC::Frame*) override { return true; }
+#endif
+    size_t memoryBytesUsedByCache() override { return 0; }
+    void incrementAccessCount() override {}
+    void decrementAccessCount() override {}
+    void closeDatabaseIfIdle() override {}
+
+    // The shared item map for an origin and WKC::StorageType.
+    static std::shared_ptr<Items> items_for(const WKC::String& origin, int type);
+
+private:
+    static std::u16string to_u16(const WKC::String& s);
+    static WKC::String to_wkc(const std::u16string& s);
+    std::shared_ptr<Items> items_;
+    unsigned quota_;  // bytes (UTF-16), 0 = unlimited
+};
+
+// Session history (the back/forward list). The engine keeps none itself: it hands every new entry
+// to the embedder and asks it for entries relative to the current one (history.length, back/forward,
+// history.go). Modelled on WebKit's BackForwardList: adding an entry drops everything forward of
+// the current one, and the oldest entry goes once the list is full.
+class HostBackForwardList : public WKC::StubBackForwardClientIf {
+public:
+    ~HostBackForwardList() { close(); }
+    void addItem(WKC::HistoryItem* item) override;
+    void goToItem(WKC::HistoryItem* item) override;
+    WKC::HistoryItem* itemAtIndex(int index) override;  // relative to the current entry
+    int backListCount() override { return current_ < 0 ? 0 : current_; }
+    int forwardListCount() override { return current_ < 0 ? 0 : static_cast<int>(items_.size()) - 1 - current_; }
+    void close() override;
+
+private:
+    static constexpr size_t kCapacity = 100;  // WebKit's default
+    std::vector<WKC::HistoryItem*> items_;    // our own references (HistoryItem::create(item, true))
+    int current_ = -1;
 };
 
 // Creates the client objects for each WebView / frame. Every object handed to the engine has its
@@ -171,7 +256,10 @@ public:
     NXB_STUB_CLIENT(GeolocationClientIf, GeolocationClient)
     NXB_STUB_CLIENT(DeviceMotionClientIf, DeviceMotionClient)
     NXB_STUB_CLIENT(DeviceOrientationClientIf, DeviceOrientationClient)
-    NXB_STUB_CLIENT(BackForwardClientIf, BackForwardClient)
+    WKC::BackForwardClientIf* createBackForwardClient(WKC::WKCWebView*) override {
+        return gate_vtable(new HostBackForwardList());
+    }
+    void deleteBackForwardClient(WKC::BackForwardClientIf* c) override { delete static_cast<HostBackForwardList*>(c); }
 #if NXB_CORE == 0
     NXB_STUB_CLIENT(BatteryClientIf, BatteryClient)
     NXB_STUB_CLIENT(NavigatorContentUtilsClientIf, NavigatorContentUtilsClient)
@@ -183,11 +271,11 @@ public:
 
     void notifyDeviceMotionClientDestroyed(WKC::DeviceMotionClientIf*) override {}
     void notifyDeviceOrientationClientDestroyed(WKC::DeviceOrientationClientIf*) override {}
-    WKC::StorageAreaIf* createStorageAreaClient(WKC::WKCWebView*, const WKC::String&, WKC::StorageType,
-                                                unsigned int) override {
-        return gate_vtable(new WKC::StubStorageAreaIf());
+    WKC::StorageAreaIf* createStorageAreaClient(WKC::WKCWebView*, const WKC::String& origin, WKC::StorageType type,
+                                                unsigned int quota) override {
+        return gate_vtable(new HostStorageArea(HostStorageArea::items_for(origin, type), quota));
     }
-    void deleteStorageAreaClient(WKC::StorageAreaIf* c) override { delete static_cast<WKC::StubStorageAreaIf*>(c); }
+    void deleteStorageAreaClient(WKC::StorageAreaIf* c) override { delete static_cast<HostStorageArea*>(c); }
 
 private:
     const ViewConfig& config_;

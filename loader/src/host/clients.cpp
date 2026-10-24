@@ -1,13 +1,18 @@
 #include "host/clients.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include <helpers/WKCDocument.h>
 #include <helpers/WKCEditor.h>
 #include <helpers/WKCEventTarget.h>
 #include <helpers/WKCFrame.h>
+#include <helpers/WKCHistoryItem.h>
 #include <helpers/WKCKeyboardEvent.h>
 #include <helpers/WKCNode.h>
 #include <helpers/WKCResourceError.h>
 
+#include "host/run_loop.h"
 #include "log.h"
 
 namespace nxb {
@@ -24,11 +29,93 @@ WKCFloatRect HostChromeClient::pageRect() {
     return windowRect();
 }
 
-void HostChromeClient::addMessageToConsole(WKC::MessageSource, WKC::MessageType, WKC::MessageLevel level,
+namespace {
+
+#if NXB_CORE == 3
+// Applies console format specifiers (%s %d %i %f %o %O %c %%) in `format` using `args`, then
+// appends the unused arguments separated by spaces, like browser consoles do. The engine has
+// already converted every argument to a string, so objects arrive as "[object Object]".
+std::string format_console(const std::string& format, const std::vector<std::string>& args) {
+    std::string out;
+    size_t next = 0;
+    for (size_t i = 0; i < format.size(); i++) {
+        char c = format[i];
+        if (c != '%' || i + 1 >= format.size()) {
+            out += c;
+            continue;
+        }
+        char spec = format[i + 1];
+        if (spec == '%') {
+            out += '%';
+            i++;
+        } else if (std::strchr("sdifoOc", spec) && next < args.size()) {
+            const std::string& arg = args[next++];
+            if (spec == 'd' || spec == 'i' || spec == 'f') {
+                char* end = nullptr;
+                double v = std::strtod(arg.c_str(), &end);
+                if (end == arg.c_str()) out += "NaN";
+                else if (spec == 'f') out += arg;
+                else out += std::to_string(static_cast<long long>(v));
+            } else if (spec != 'c') {  // %c takes a CSS string, which plain text can't show
+                out += arg;
+            }
+            i++;
+        } else {
+            out += c;
+        }
+    }
+    for (; next < args.size(); next++) out += " " + args[next];
+    return out;
+}
+#endif
+
+}  // namespace
+
+void HostChromeClient::flush_console() {
+    if (!pending_console_.active) return;
+    pending_console_.active = false;
+    if (events_.console)
+        events_.console(pending_console_.message, pending_console_.line, pending_console_.source, pending_console_.level);
+}
+
+void HostChromeClient::addMessageToConsole(WKC::MessageSource source, WKC::MessageType, WKC::MessageLevel level,
                                            const WKC::String& message, unsigned int lineNumber,
                                            const WKC::String& sourceID) {
+    flush_console();
+#if NXB_CORE == 3
+    if (source == WKC::MessageSource::ConsoleAPI) {
+        pending_console_ = {true, to_std(message), to_std(sourceID), lineNumber, static_cast<int>(level)};
+        RunLoop::main().post([this] { flush_console(); });
+        return;
+    }
+#else
+    (void)source;
+#endif
     if (events_.console) events_.console(to_std(message), lineNumber, to_std(sourceID), static_cast<int>(level));
 }
+
+#if NXB_CORE == 3
+void HostChromeClient::addMessageWithArgumentsToConsole(WKC::MessageSource, WKC::MessageLevel level,
+                                                        const WKC::String& message,
+                                                        const std::vector<WKC::String>& arguments,
+                                                        unsigned int lineNumber, unsigned, const WKC::String& sourceID) {
+    // The engine's std::vector is libc++'s; read its {begin, end, capacity} directly instead of
+    // trusting libstdc++'s vector to match it.
+    struct RawVector {
+        const WKC::String *begin, *end, *cap;
+    };
+    auto& raw = reinterpret_cast<const RawVector&>(arguments);
+    std::vector<std::string> args;
+    for (auto* p = raw.begin; p != raw.end; ++p) args.push_back(to_std(*p));
+    std::string first = to_std(message), source = to_std(sourceID);
+    // Normally this completes the message addMessageToConsole just held back.
+    if (pending_console_.active && pending_console_.message == first && pending_console_.line == lineNumber)
+        pending_console_.active = false;
+    else
+        flush_console();
+    if (events_.console) events_.console(format_console(first, args), lineNumber, source, static_cast<int>(level));
+}
+#endif
 
 void HostChromeClient::runJavaScriptAlert(WKC::Frame*, const WKC::String& message) {
     if (events_.alert) events_.alert(to_std(message));
@@ -140,6 +227,90 @@ void HostEditorClient::handleKeyboardEvent(WKC::KeyboardEvent* event) {
             if (cmd.execute(event)) event->setDefaultHandled();
         }
     }
+}
+
+}  // namespace nxb
+
+namespace nxb {
+
+std::u16string HostStorageArea::to_u16(const WKC::String& s) {
+    const unsigned short* chars = s.charactersWithNullTermination();
+    return chars ? std::u16string(reinterpret_cast<const char16_t*>(chars), s.length()) : std::u16string();
+}
+
+WKC::String HostStorageArea::to_wkc(const std::u16string& s) {
+    return WKC::String(reinterpret_cast<const unsigned short*>(s.data()), static_cast<unsigned>(s.size()));
+}
+
+std::shared_ptr<HostStorageArea::Items> HostStorageArea::items_for(const WKC::String& origin, int type) {
+    static std::map<std::pair<std::u16string, int>, std::shared_ptr<Items>> all;
+    auto& items = all[{to_u16(origin), type}];
+    if (!items) items = std::make_shared<Items>();
+    return items;
+}
+
+WKC::String HostStorageArea::key(unsigned index) {
+    if (index >= items_->size()) return WKC::String();
+    auto it = items_->begin();
+    std::advance(it, index);
+    return to_wkc(it->first);
+}
+
+WKC::String HostStorageArea::item(const WKC::String& key) {
+    auto it = items_->find(to_u16(key));
+    return it == items_->end() ? WKC::String() : to_wkc(it->second);  // null String -> getItem() returns null
+}
+
+void HostStorageArea::setItem(WKC::Frame*, const WKC::String& key, const WKC::String& value, bool& quotaException) {
+    std::u16string k = to_u16(key), v = to_u16(value);
+    if (quota_) {
+        size_t used = 0;
+        for (auto& kv : *items_)
+            if (kv.first != k) used += kv.first.size() + kv.second.size();
+        if ((used + k.size() + v.size()) * 2 > quota_) {
+            quotaException = true;
+            return;
+        }
+    }
+    quotaException = false;
+    (*items_)[k] = std::move(v);
+}
+
+}  // namespace nxb
+
+namespace nxb {
+
+void HostBackForwardList::addItem(WKC::HistoryItem* item) {
+    if (!item) return;
+    // Drop the forward entries, then the oldest one if the list is full.
+    for (size_t i = current_ + 1; i < items_.size(); i++) WKC::HistoryItem::destroy(items_[i]);
+    items_.resize(current_ + 1);
+    if (items_.size() >= kCapacity) {
+        WKC::HistoryItem::destroy(items_.front());
+        items_.erase(items_.begin());
+    }
+    items_.push_back(WKC::HistoryItem::create(item, true));  // `item` is a temporary wrapper
+    current_ = static_cast<int>(items_.size()) - 1;
+}
+
+void HostBackForwardList::goToItem(WKC::HistoryItem* item) {
+    for (size_t i = 0; i < items_.size(); i++)
+        if (items_[i]->compare(item)) {
+            current_ = static_cast<int>(i);
+            return;
+        }
+    LOG("warning: goToItem for an entry not in the back/forward list");
+}
+
+WKC::HistoryItem* HostBackForwardList::itemAtIndex(int index) {
+    long i = static_cast<long>(current_) + index;
+    return current_ >= 0 && i >= 0 && i < static_cast<long>(items_.size()) ? items_[i] : nullptr;
+}
+
+void HostBackForwardList::close() {
+    for (auto* item : items_) WKC::HistoryItem::destroy(item);
+    items_.clear();
+    current_ = -1;
 }
 
 }  // namespace nxb

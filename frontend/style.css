@@ -110,3 +110,4 @@ button:disabled { opacity: .4; cursor: default; }
   .toolbar { flex-wrap: wrap; }
   .address { order: 10; flex-basis: 100%; }
 }
+.log .stub { font-style: italic; }

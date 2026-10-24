@@ -25,6 +25,7 @@
 
 #include "../host_symbols.h"
 #include "../log.h"
+#include "../stub_report.h"
 #include "dns.h"
 
 namespace {
@@ -338,7 +339,8 @@ int GetLastError() { return t_last_error; }
 // Nothing in the engine calls this (wkcNetGetAddrInfo is exported but unused), and the BSD vs
 // Linux addrinfo field order hasn't been confirmed, so fail cleanly rather than guess.
 int GetAddrInfo(const char* node, const char*, const void*, void** out, const void*, size_t) {
-    LOG("socket GetAddrInfo(%s): not implemented", node ? node : "(null)");
+    TRACE("socket GetAddrInfo(%s)", node ? node : "(null)");
+    nxb::report_stub("nn::socket::GetAddrInfo");
     if (out) *out = nullptr;
     return 4;  // EAI_FAIL
 }

@@ -59,6 +59,8 @@ function onText(m) {
       break;
     case "url":
       if (document.activeElement !== urlInput && m.v) urlInput.value = m.v;
+      $("back").disabled = !m.back;
+      $("fwd").disabled = !m.fwd;
       break;
     case "title":
       setTitle(m.v);
@@ -68,6 +70,9 @@ function onText(m) {
       break;
     case "console":
       log(m.msg, m.level >= 3 ? "error" : m.level === 2 ? "warn" : "", m.src ? `${m.src}:${m.line}` : "");
+      break;
+    case "stub":
+      log(`unimplemented in host: ${m.name}`, "warn stub");
       break;
     case "alert":
       log(`alert: ${m.msg}`, "warn");

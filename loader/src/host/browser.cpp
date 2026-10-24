@@ -106,6 +106,9 @@ bool Browser::create_view(const ViewConfig& config) {
     WKCSize size{config.width, config.height};
     bool ok = view_->setOffscreen(WKC::EOffscreenFormatCairo32, bitmap_.data(), config.width * 4, size, size, false);
     LOG("WebView created (%dx%d), setOffscreen -> %s", config.width, config.height, ok ? "ok" : "FAILED");
+    WKC::WKCSettings* settings = view_->settings();
+    settings->setLocalStorageEnabled(true);  // off by default (localStorage is null); see HostStorageArea
+    if (!config.user_style_sheet.empty()) settings->setUserStyleSheetLocation(config.user_style_sheet.c_str());
     view_->notifyFocusIn();  // the view must have focus to receive keyboard input
     return ok;
 }
@@ -266,6 +269,7 @@ void Browser::text(unsigned codepoint) {
 void Browser::go_back_or_forward(int steps) {
     if (view_->canGoBackOrForward(steps)) view_->goBackOrForward(steps);
 }
+bool Browser::can_go_back_or_forward(int steps) { return view_->canGoBackOrForward(steps); }
 void Browser::reload() { view_->reload(); }
 void Browser::stop() { view_->stopLoading(); }
 

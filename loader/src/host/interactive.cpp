@@ -9,6 +9,7 @@
 #include "host/run_loop.h"
 #include "host/ws_server.h"
 #include "log.h"
+#include "stub_report.h"
 
 namespace nxb {
 namespace {
@@ -149,6 +150,13 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
                          ",\"core\":" + std::to_string(opts.core) + ",\"ua\":" + json_escape(opts.user_agent) + "}");
     };
 
+    // The URL plus whether back/forward are possible (for the toolbar buttons).
+    auto send_url = [&] {
+        server.send_text("{\"t\":\"url\",\"v\":" + json_escape(browser.current_url()) +
+                         ",\"back\":" + (browser.can_go_back_or_forward(-1) ? "true" : "false") +
+                         ",\"fwd\":" + (browser.can_go_back_or_forward(1) ? "true" : "false") + "}");
+    };
+
     browser.events.repaint = [&](const WKCRect& r) { dirty.add(r); };
     browser.events.title_changed = [&](const std::string& t) {
         title = t;
@@ -159,7 +167,7 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
     auto full_repaint = [&] { dirty.add(WKCRect{0, 0, browser.width(), browser.height()}); };
     browser.events.location_changed = [&] {
         full_repaint();
-        server.send_text("{\"t\":\"url\",\"v\":" + json_escape(browser.current_url()) + "}");
+        send_url();
     };
     browser.events.load_started = [&] {
         loading = true;
@@ -169,7 +177,7 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
         full_repaint();
         loading = false;
         server.send_text("{\"t\":\"loading\",\"v\":false}");
-        server.send_text("{\"t\":\"url\",\"v\":" + json_escape(browser.current_url()) + "}");
+        send_url();
     };
     browser.events.load_failed = [&](const std::string& url, const std::string& desc) {
         loading = false;
@@ -184,6 +192,12 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
     browser.events.alert = [&](const std::string& msg) {
         server.send_text("{\"t\":\"alert\",\"msg\":" + json_escape(msg) + "}");
     };
+
+    // Unimplemented host features the page touched; shown as warnings in the UI console.
+    auto send_stub = [&server](const std::string& name) {
+        server.send_text("{\"t\":\"stub\",\"name\":" + json_escape(name) + "}");
+    };
+    set_stub_listener([send_stub](const char* name) { send_stub(name); });
 
     // Commands arrive on the server thread; run them on the loop thread.
     server.on_message = [&](const std::string& text) {
@@ -233,6 +247,9 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
     server.on_connect = [&] {
         loop.post([&] {
             send_state();
+            send_url();
+            for (auto& s : stub_counts())  // ones hit before this client connected
+                if (!s.expected) send_stub(s.name);
             dirty.add(WKCRect{0, 0, browser.width(), browser.height()});
         });
         loop.wake();

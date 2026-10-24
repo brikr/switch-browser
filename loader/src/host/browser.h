@@ -44,6 +44,7 @@ public:
     void key(bool down, int key_code, int mods, bool repeat);  // Windows virtual-key codes
     void text(unsigned codepoint);                             // character input
     void go_back_or_forward(int steps);
+    bool can_go_back_or_forward(int steps);
     void reload();
     void stop();
     void set_device_mode(bool handheld);

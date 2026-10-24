@@ -12,7 +12,10 @@
 #include "host/browser.h"
 #include "host/interactive.h"
 #include "host/run_loop.h"
+#include "host/skin.h"
+#include "host/watchdog.h"
 #include "linker.h"
+#include "stub_report.h"
 #include "log.h"
 
 namespace {
@@ -44,6 +47,7 @@ const char* kDefaultHtml =
                  "  --engine      directory containing the decompressed engine NROs (%s.nro, ...)\n"
                  "  --romfs       BrowserDll RomFS root (served as rom:/)\n"
                  "  --html        load this HTML file (default: a small console.log test page)\n"
+                 "  --base-url    with --html, the document URL to load it as (default about:blank)\n"
                  "  --url         load this URL instead\n"
                  "  --eval        evaluate JS in the page after it loads and print the result (repeatable)\n"
                  "  --user-agent  override the user agent\n"
@@ -73,7 +77,7 @@ std::string read_file(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string engine_dir, romfs_dir, html_path, url, fonts_dir, screenshot_path, certs_dir;
+    std::string engine_dir, romfs_dir, html_path, base_url = "about:blank", url, fonts_dir, screenshot_path, certs_dir;
     nxb::ServeOptions serve;
     bool serving = false;
     std::vector<std::string> evals;
@@ -85,6 +89,7 @@ int main(int argc, char** argv) {
         if (arg("--engine")) engine_dir = argv[++i];
         else if (arg("--romfs")) romfs_dir = argv[++i];
         else if (arg("--html")) html_path = argv[++i];
+        else if (arg("--base-url")) base_url = argv[++i];
         else if (arg("--url")) url = argv[++i];
         else if (arg("--eval")) evals.push_back(argv[++i]);
         else if (arg("--user-agent")) config.user_agent = argv[++i];
@@ -113,6 +118,7 @@ int main(int argc, char** argv) {
     linker.run_init();
     bind_engine_imports(linker);
 
+    nxb::start_watchdog();
     nxb::Browser browser;
     bool loaded = false, failed = false;
     browser.events.console = [](const std::string& msg, unsigned line, const std::string& src, int level) {
@@ -131,11 +137,13 @@ int main(int argc, char** argv) {
     browser.load_icu_data(romfs_dir);
     if (!fonts_dir.empty() && browser.register_fonts(fonts_dir) == 0) LOG("warning: no fonts registered from %s", fonts_dir.c_str());
     if (!certs_dir.empty() && browser.register_root_cas(certs_dir) == 0) LOG("warning: no root CAs registered from %s", certs_dir.c_str());
+    nxb::register_skin(romfs_dir);
+    config.user_style_sheet = nxb::user_style_sheet_url(romfs_dir);
     if (!browser.create_view(config)) return 1;
 
     if (serving) {
         if (serve.ui_dir.empty()) serve.ui_dir = "frontend";
-        if (!html_path.empty()) browser.load_html(read_file(html_path), "about:blank");
+        if (!html_path.empty()) browser.load_html(read_file(html_path), base_url);
         serve.start_url = url;
         serve.user_agent = config.user_agent;
         serve.core = NXB_CORE;
@@ -143,7 +151,7 @@ int main(int argc, char** argv) {
     }
 
     if (!url.empty()) browser.load_url(url);
-    else browser.load_html(html_path.empty() ? kDefaultHtml : read_file(html_path), "about:blank");
+    else browser.load_html(html_path.empty() ? kDefaultHtml : read_file(html_path), base_url);
 
     auto& loop = nxb::RunLoop::main();
     if (!loop.run_until([&] { return loaded || failed; }, std::chrono::seconds(timeout_s)))
@@ -160,6 +168,7 @@ int main(int argc, char** argv) {
         std::printf("%s %s => %s\n", threw ? "threw" : "eval", js.c_str(), result.c_str());
     }
     std::fflush(stdout);
+    nxb::log_stub_summary();
     // Skip engine teardown for now; just exit.
     std::_Exit(failed ? 1 : 0);
 }

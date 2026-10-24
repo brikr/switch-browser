@@ -118,7 +118,7 @@ def main():
     write_png(args.out, 1280, 720, bytes(fb))
     print("frames:", frames)
     for m in messages:
-        if m["t"] in ("title", "eval", "console", "url", "loading"):
+        if m["t"] in ("title", "eval", "console", "url", "loading", "stub"):
             print(" ", json.dumps(m)[:160])
     print("wrote", args.out)
 

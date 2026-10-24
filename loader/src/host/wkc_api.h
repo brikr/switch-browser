@@ -41,6 +41,8 @@
 #include <webkit/WKCClientBuilders.h>
 #include <webkit/WKCMemoryEventHandler.h>
 #include <webkit/WKCPrefs.h>
+#include <webkit/WKCSkin.h>
+#include <helpers/WKCSettings.h>
 #if NXB_CORE == 0
 #include <webkit/WKCTimerEventHandler.h>
 #endif

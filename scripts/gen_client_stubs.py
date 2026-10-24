@@ -102,7 +102,10 @@ def pure_virtuals(body):
 
 def emit_method(cls, ret, name, args, const):
     sig = f"{ret} {name}({args}){' const' if const else ''} override"
-    log = f'NXB_STUB_CALL("{cls}::{name}");'
+    true_default = any(cls == c and name.startswith(prefix) for c, prefix in TRUE_DEFAULTS)
+    noop = true_default or cls in NOOP_OK_CLASSES or f"{cls}::{name}" in NOOP_OK
+    macro = "NXB_STUB_NOOP" if noop else "NXB_STUB_CALL"
+    log = f'{macro}("{cls}::{name}");'
     if ret == "void":
         return f"    {sig} {{ {log} }}"
     value = special_returns().get(ret.replace("WKC::", ""), "{}")
@@ -115,6 +118,84 @@ def emit_method(cls, ret, name, args, const):
 # permission checks (false blocks all text editing). Other interfaces' should* stay false
 # (e.g. ChromeClientIf::shouldInterruptJavaScript).
 TRUE_DEFAULTS = [("EditorClientIf", "should")]
+
+# Stubs whose no-op/default is the right behaviour for this host: they're counted but not logged
+# (see stub_report.h). Everything else is reported on its first call, so add a method here only
+# after checking that ignoring it can't change what a page sees.
+NOOP_OK_CLASSES = {
+    "ProgressTrackerClientIf",  # load progress notifications; the UI uses load start/finish instead
+}
+NOOP_OK = {
+    # Load notifications. The engine does the work itself; these only inform the embedder.
+    "FrameLoaderClientIf::assignIdentifierToInitialRequest",
+    "FrameLoaderClientIf::cancelPolicyCheck",
+    "FrameLoaderClientIf::committedLoad",
+    "FrameLoaderClientIf::didChangeTitle",
+    "FrameLoaderClientIf::dispatchDidClearWindowObjectInWorld",
+    "FrameLoaderClientIf::dispatchDidDispatchOnloadEvents",
+    "FrameLoaderClientIf::dispatchDidFinishDocumentLoad",
+    "FrameLoaderClientIf::dispatchDidFinishLoading",
+    "FrameLoaderClientIf::dispatchDidLayout",
+    "FrameLoaderClientIf::dispatchDidReachLayoutMilestone",
+    "FrameLoaderClientIf::dispatchDidReceiveContentLength",
+    "FrameLoaderClientIf::dispatchDidReceiveResponse",
+    "FrameLoaderClientIf::dispatchDidReceiveServerRedirectForProvisionalLoad",
+    "FrameLoaderClientIf::dispatchGlobalObjectAvailable",
+    "FrameLoaderClientIf::dispatchWillClose",
+    "FrameLoaderClientIf::dispatchWillSendRequest",  # the embedder may rewrite requests; we don't
+    "FrameLoaderClientIf::finishedLoading",
+    "FrameLoaderClientIf::forceLayoutForNonHTML",
+    "FrameLoaderClientIf::frameLoadCompleted",
+    "FrameLoaderClientIf::makeRepresentation",
+    "FrameLoaderClientIf::prepareForDataSourceReplacement",
+    "FrameLoaderClientIf::provisionalLoadStarted",
+    "FrameLoaderClientIf::representationExistsForURLScheme",  # false: no custom URL scheme views
+    "FrameLoaderClientIf::setCopiesOnScroll",
+    "FrameLoaderClientIf::setMainFrameDocumentReady",
+    "FrameLoaderClientIf::setTitle",
+    "FrameLoaderClientIf::transitionToCommittedForNewPage",
+    "FrameLoaderClientIf::updateGlobalHistory",
+    "FrameLoaderClientIf::updateGlobalHistoryRedirectLinks",
+    "FrameLoaderClientIf::willChangeTitle",
+    "FrameLoaderClientIf::didChangeScrollOffset",
+    "FrameLoaderClientIf::didFinishLoad",
+    "FrameLoaderClientIf::didRestoreFromHTTPCache",
+    "FrameLoaderClientIf::dispatchDidLoadResourceFromMemoryCache",
+    "FrameLoaderClientIf::dispatchDidNavigateWithinPage",  # also reported as push/pop/location change
+    # Per-item view state for the embedder (zoom etc.); WebCore restores scroll positions itself.
+    "FrameLoaderClientIf::saveViewStateToItem",
+    "FrameLoaderClientIf::restoreViewState",
+    "FrameLoaderClientIf::shouldUseCredentialStorage",  # false; only matters for HTTP auth (no UI yet)
+    # View notifications: no zoom, scrollbars or native focus ring in this host.
+    "ChromeClientIf::allowedCompositingTriggers",  # 0: no accelerated compositing (layer callbacks unset)
+    "ChromeClientIf::contentsSizeChanged",
+    "ChromeClientIf::dispatchApplyOverflowToViewport",
+    "ChromeClientIf::dispatchViewportDataDidChange",
+    "ChromeClientIf::dispatchWillSetHasFocusVisibleForFocusedElement",
+    "ChromeClientIf::elementDidBlur",
+    "ChromeClientIf::elementDidFocus",
+    "ChromeClientIf::elementDidRefocus",
+    "ChromeClientIf::shouldDispatchFakeMouseMoveEvents",  # false: hover isn't re-evaluated after scrolling
+    "ChromeClientIf::focusedFrameChanged",
+    "ChromeClientIf::focusedNodeChanged",
+    "ChromeClientIf::scheduleRenderingUpdate",
+    "ChromeClientIf::scrollContainingScrollViewsToRevealRect",
+    "ChromeClientIf::shouldInterruptJavaScript",  # false: never interrupt long-running scripts
+    "ChromeClientIf::shouldPaintEntireContents",
+    "ChromeClientIf::triggerRenderingUpdate",
+    "ChromeClientIf::wheelEventHandlersChanged",
+    # Editing state: no undo menu, spell checker or IME in this host.
+    "EditorClientIf::clearUndoRedoOperations",
+    "EditorClientIf::doTextFieldCommandFromEvent",  # false: the engine handles the key itself
+    "EditorClientIf::respondToChangedContents",
+    "EditorClientIf::textDidChangeInTextField",
+    "EditorClientIf::textFieldDidEndEditing",
+    "EditorClientIf::isContinuousSpellCheckingEnabled",
+    "EditorClientIf::respondToChangedSelection",
+    "EditorClientIf::setInputMethodState",
+    "EditorClientIf::textFieldDidBeginEditing",
+    "EditorClientIf::willSetInputMethodState",
+}
 
 # Return types without a usable default constructor (set per WKC version in main()).
 _special = {}
@@ -142,10 +223,13 @@ def main():
         "#pragma once",
         "",
         '#include "host/wkc_api.h"',
-        '#include "log.h"',
+        '#include "stub_report.h"',
         "",
         "#ifndef NXB_STUB_CALL",
-        '#define NXB_STUB_CALL(name) TRACE("stub %s", name)',
+        "#define NXB_STUB_CALL(name) ::nxb::report_stub(name)",
+        "#endif",
+        "#ifndef NXB_STUB_NOOP",
+        "#define NXB_STUB_NOOP(name) ::nxb::report_stub(name, true)",
         "#endif",
         "",
         "// Inside namespace WKC so the headers' unqualified type names resolve.",

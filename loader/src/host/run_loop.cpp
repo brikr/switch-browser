@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "cfi_gate.h"
+#include "host/watchdog.h"
 #include "host/wkc_api.h"
 #include "log.h"
 
@@ -96,6 +97,7 @@ bool RunLoop::run_until(const std::function<bool()>& done, std::chrono::millisec
     while (!done()) {
         auto now = std::chrono::steady_clock::now();
         if (now >= deadline) break;
+        watchdog_heartbeat();
         run_one(std::min(deadline, now + std::chrono::milliseconds(50)));
         if (on_iteration) on_iteration();
     }
@@ -105,7 +107,7 @@ bool RunLoop::run_until(const std::function<bool()>& done, std::chrono::millisec
 void RunLoop::run_until_idle(std::chrono::milliseconds idle, std::chrono::milliseconds timeout) {
     auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline)
-        if (!run_one(std::min(deadline, std::chrono::steady_clock::now() + idle))) break;
+        if (watchdog_heartbeat(), !run_one(std::min(deadline, std::chrono::steady_clock::now() + idle))) break;
 }
 
 }  // namespace nxb
