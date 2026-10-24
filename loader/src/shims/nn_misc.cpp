@@ -1,6 +1,9 @@
 // Remaining small nn:: imports: ro, time, util.
 
+#include <sys/random.h>
+
 #include <cstdarg>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -61,7 +64,50 @@ int SNPrintf(char* buf, size_t size, const char* fmt, ...) {
     return n;
 }
 
+// --- diag ---
+
+int GetBacktrace(uintptr_t*, int) { return 0; }
+
+[[noreturn]] void AbortImpl(const char* condition, const char* function, const char* file, int line, const void*,
+                            const char* fmt, ...) {
+    std::fprintf(stderr, "[engine] nn::diag abort: %s in %s at %s:%d", condition ? condition : "?",
+                 function ? function : "?", file ? file : "?", line);
+    if (fmt) {
+        va_list ap;
+        va_start(ap, fmt);
+        std::fputs(": ", stderr);
+        std::vfprintf(stderr, fmt, ap);
+        va_end(ap);
+    }
+    std::fputc('\n', stderr);
+    std::abort();
+}
+
+// --- time zone name, crypto random ---
+
+struct LocationName { char value[36]; };
+
+void GetDeviceLocationName(LocationName* out) {
+    const char* tz = std::getenv("NXB_TIMEZONE");
+    std::memset(out->value, 0, sizeof out->value);
+    std::strncpy(out->value, tz && *tz ? tz : "UTC", sizeof out->value - 1);
+}
+
+void GenerateCryptographicallyRandomBytes(void* buf, size_t size) {
+    auto* p = static_cast<uint8_t*>(buf);
+    while (size) {
+        ssize_t n = getrandom(p, size, 0);
+        if (n <= 0) continue;
+        p += n;
+        size -= static_cast<size_t>(n);
+    }
+}
+
 HostSymbols symbols({
+    {"_ZN2nn4diag12GetBacktraceEPmi", (void*)&GetBacktrace},
+    {"_ZN2nn4diag6detail9AbortImplEPKcS3_S3_iPKNS_6ResultES3_z", (void*)&AbortImpl},
+    {"_ZN2nn4time21GetDeviceLocationNameEPNS0_12LocationNameE", (void*)&GetDeviceLocationName},
+    {"_ZN2nn6crypto36GenerateCryptographicallyRandomBytesEPvm", (void*)&GenerateCryptographicallyRandomBytes},
     {"_ZN2nn2ro12ProtectRelroEPKvS2_S2_S2_S2_", (void*)&ProtectRelro},
     {"_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditionalInfoERKNS0_9PosixTimeE",
      (void*)&ToCalendarTime},

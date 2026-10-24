@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "cfi_gate.h"
 #include "host/wkc_api.h"
 #include "log.h"
 
@@ -10,6 +11,18 @@ namespace nxb {
 RunLoop& RunLoop::main() {
     static RunLoop loop;
     return loop;
+}
+
+#if NXB_CORE == 3
+static void engine_wakeup() {
+    RunLoop::main().wake();
+}
+#endif
+
+void RunLoop::attach_engine() {
+#if NXB_CORE == 3
+    WKC::WKCWebKitRunLoopSetWakeUpCallback(gate_function(&engine_wakeup));
+#endif
 }
 
 void RunLoop::post_wakeup(void* timer, void* data) {
@@ -34,18 +47,42 @@ void RunLoop::post(std::function<void()> task) {
     cv_.notify_one();
 }
 
-// Waits for one item until `until`; runs it. Returns whether something ran.
+void RunLoop::wake() {
+    {
+        std::lock_guard<std::mutex> g(mutex_);
+        woken_ = true;
+    }
+    cv_.notify_one();
+}
+
 bool RunLoop::run_one(std::chrono::steady_clock::time_point until) {
+#if NXB_CORE == 3
+    WKC::WKCWebKitIterateRunLoop();
+    // Engine work may be due again soon; never sleep past it (or 100 ms, as a safety net).
+    uint64_t next_us = WKC::WKCWebKitRunLoopGetNextWakeUpTime();
+    auto engine_due = std::chrono::steady_clock::now() + std::chrono::microseconds(std::min<uint64_t>(next_us, 100000));
+    until = std::min(until, engine_due);
+#endif
     Item item;
     {
         std::unique_lock<std::mutex> l(mutex_);
-        if (!cv_.wait_until(l, until, [&] { return !queue_.empty(); })) return false;
+        bool ready = cv_.wait_until(l, until, [&] { return !queue_.empty() || woken_; });
+#if NXB_CORE == 3
+        bool engine_timer_fired = !ready && std::chrono::steady_clock::now() >= engine_due && next_us <= 100000;
+        if (!ready) return engine_timer_fired;
+        woken_ = false;
+        if (queue_.empty()) return true;
+#else
+        if (!ready) return false;
+#endif
         item = std::move(queue_.front());
         queue_.pop_front();
     }
     if (item.timer) {
+#if NXB_CORE == 0
         TRACE("wakeup timer=%p", item.timer);
         WKC::WKCWebKitWakeUp(item.timer, item.data);
+#endif
     } else {
         item.task();
     }

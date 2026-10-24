@@ -19,7 +19,10 @@
 #include <helpers/WKCString.h>
 
 #include <helpers/BackForwardClientIf.h>
+#if NXB_CORE == 0
 #include <helpers/BatteryClientIf.h>
+#include <helpers/NavigatorContentUtilsClientIf.h>
+#endif
 #include <helpers/ChromeClientIf.h>
 #include <helpers/ContextMenuClientIf.h>
 #include <helpers/DeviceMotionClientIf.h>
@@ -30,7 +33,6 @@
 #include <helpers/FrameLoaderClientIf.h>
 #include <helpers/GeolocationClientIf.h>
 #include <helpers/InspectorClientIf.h>
-#include <helpers/NavigatorContentUtilsClientIf.h>
 #include <helpers/ProgressTrackerClientIf.h>
 #include <helpers/StorageAreaIf.h>
 #include <helpers/VibrationClientIf.h>
@@ -39,6 +41,8 @@
 #include <webkit/WKCClientBuilders.h>
 #include <webkit/WKCMemoryEventHandler.h>
 #include <webkit/WKCPrefs.h>
+#if NXB_CORE == 0
 #include <webkit/WKCTimerEventHandler.h>
+#endif
 #include <webkit/WKCWebFrame.h>
 #include <webkit/WKCWebView.h>

@@ -6,3 +6,4 @@ __pycache__/
 analysis/
 .claude/settings.local.json
 CLAUDE.local.md
+deps/

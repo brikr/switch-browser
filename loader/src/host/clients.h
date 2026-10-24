@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 
+#include "cfi_gate.h"
 #include "generated/stub_clients.h"
 
 namespace nxb {
@@ -63,13 +64,17 @@ public:
     bool allowScript(bool enabledPerSettings) override { return enabledPerSettings; }
     bool allowWebGL(bool enabledPerSettings) override { return enabledPerSettings; }
     bool shouldGoToHistoryItem(WKC::HistoryItem*) const override { return true; }
+#if NXB_CORE == 0
     bool dispatchWillAcceptCookie(bool, WKC::ResourceHandle*, const char*, const char*, const char*) override { return true; }
+#endif
     bool dispatchWillReceiveData(WKC::ResourceHandle*, int) override { return true; }
     bool notifySSLHandshakeStatus(WKC::ResourceHandle*, WKC::SSLHandshakeStatus) override { return true; }
     int dispatchWillPermitSendRequest(void*, const char*, WKC::ContentComposition, bool,
                                       const WKC::ResourceResponse&) override { return 1; }  // allow
     WKC::String userAgent(const WKC::KURL&) override;
 
+    // Navigation policy: allow everything.
+#if NXB_CORE == 0
     void dispatchDecidePolicyForNewWindowAction(WKC::FramePolicyFunction& f, const WKC::NavigationAction&,
                                                 const WKC::ResourceRequest&, WKC::FormState*,
                                                 const WKC::String&) override { f.reply(WKC::PolicyUse); }
@@ -80,6 +85,22 @@ public:
     void dispatchDecidePolicyForResponse(WKC::FramePolicyFunction& f, const WKC::ResourceResponse&,
                                          const WKC::ResourceRequest&) override { f.reply(WKC::PolicyUse); }
     void dispatchWillSubmitForm(WKC::FramePolicyFunction& f, WKC::FormState*) override { f.reply(WKC::PolicyUse); }
+#else
+    void dispatchDecidePolicyForNewWindowAction(WKC::FramePolicyFunction& f, const WKC::NavigationAction&,
+                                                const WKC::ResourceRequest&, WKC::FormState*, const WKC::String&,
+                                                const WKC::PolicyCheckIdentifier& id) override {
+        f.reply(WKC::PolicyAction::Use, id);
+    }
+    void dispatchDecidePolicyForNavigationAction(WKC::FramePolicyFunction& f, const WKC::NavigationAction&,
+                                                 const WKC::ResourceRequest&, const WKC::ResourceResponse&,
+                                                 WKC::FormState*, const WKC::PolicyCheckIdentifier& id) override {
+        f.reply(WKC::PolicyAction::Use, id);
+    }
+    void dispatchDecidePolicyForResponse(WKC::FramePolicyFunction& f, const WKC::ResourceResponse&,
+                                         const WKC::ResourceRequest&, const WKC::PolicyCheckIdentifier& id) override {
+        f.reply(WKC::PolicyAction::Use, id);
+    }
+#endif
 
     void dispatchDidFinishLoad() override;
     void dispatchDidFailLoad(const WKC::ResourceError& e) override;
@@ -92,23 +113,26 @@ private:
     ViewEvents& events_;
 };
 
-// Creates the client objects for each WebView / frame. Most interfaces have non-virtual destructors,
+// Creates the client objects for each WebView / frame. Every object handed to the engine has its
+// vtable gated (cfi_gate.h). Most interfaces have non-virtual destructors,
 // so deletes go through the concrete type that was created.
 class HostClientBuilders : public WKC::WKCClientBuilders {
 public:
     HostClientBuilders(const ViewConfig& config, ViewEvents& events) : config_(config), events_(events) {}
 
-    WKC::ChromeClientIf* createChromeClient(WKC::WKCWebView*) override { return new HostChromeClient(config_, events_); }
+    WKC::ChromeClientIf* createChromeClient(WKC::WKCWebView*) override {
+        return gate_vtable(new HostChromeClient(config_, events_));
+    }
     void deleteChromeClient(WKC::ChromeClientIf* c) override { delete static_cast<HostChromeClient*>(c); }
     WKC::FrameLoaderClientIf* createFrameLoaderClient(WKC::WKCWebFrame* frame) override {
-        return new HostFrameLoaderClient(frame, config_, events_);
+        return gate_vtable(new HostFrameLoaderClient(frame, config_, events_));
     }
     void deleteFrameLoaderClient(WKC::FrameLoaderClientIf* c) override {
         delete static_cast<HostFrameLoaderClient*>(c);
     }
 
 #define NXB_STUB_CLIENT(Type, Name)                                                         \
-    WKC::Type* create##Name(WKC::WKCWebView*) override { return new WKC::Stub##Type(); } \
+    WKC::Type* create##Name(WKC::WKCWebView*) override { return gate_vtable(new WKC::Stub##Type()); } \
     void delete##Name(WKC::Type* c) override { delete static_cast<WKC::Stub##Type*>(c); }
     NXB_STUB_CLIENT(ContextMenuClientIf, ContextMenuClient)
     NXB_STUB_CLIENT(DragClientIf, DragClient)
@@ -119,8 +143,10 @@ public:
     NXB_STUB_CLIENT(DeviceMotionClientIf, DeviceMotionClient)
     NXB_STUB_CLIENT(DeviceOrientationClientIf, DeviceOrientationClient)
     NXB_STUB_CLIENT(BackForwardClientIf, BackForwardClient)
+#if NXB_CORE == 0
     NXB_STUB_CLIENT(BatteryClientIf, BatteryClient)
     NXB_STUB_CLIENT(NavigatorContentUtilsClientIf, NavigatorContentUtilsClient)
+#endif
     NXB_STUB_CLIENT(ProgressTrackerClientIf, ProgressTrackerClient)
     NXB_STUB_CLIENT(WebNfcClientIf, WebNfcClient)
     NXB_STUB_CLIENT(VibrationClientIf, VibrationClient)
@@ -130,7 +156,7 @@ public:
     void notifyDeviceOrientationClientDestroyed(WKC::DeviceOrientationClientIf*) override {}
     WKC::StorageAreaIf* createStorageAreaClient(WKC::WKCWebView*, const WKC::String&, WKC::StorageType,
                                                 unsigned int) override {
-        return new WKC::StubStorageAreaIf();
+        return gate_vtable(new WKC::StubStorageAreaIf());
     }
     void deleteStorageAreaClient(WKC::StorageAreaIf* c) override { delete static_cast<WKC::StubStorageAreaIf*>(c); }
 

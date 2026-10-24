@@ -6,7 +6,8 @@ Usage:
 --firmware is a firmware zip (as published on THZoria/NX_Firmware) or a directory of NCAs.
 Requires `nstool` on PATH. Produces:
   <out>/romfs/           BrowserDll (0100000000000803) RomFS, with nro/*.nro decompressed
-  <out>/engine -> romfs/nro/netfront/core_0/Default/cfi_nocfi   (what the loader's --engine expects)
+  <out>/engine  -> romfs/nro/netfront/core_0/Default/cfi_nocfi  (--engine for wkc-loader-core0)
+  <out>/engine3 -> romfs/nro/netfront/core_3/Default/cfi_nncfi  (--engine for wkc-loader-core3)
 """
 import argparse
 import os
@@ -21,7 +22,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from unlz4nro import decompress_file  # noqa: E402
 
 BROWSER_DLL = "0x0100000000000803"
-ENGINE_SUBDIR = "nro/netfront/core_0/Default/cfi_nocfi"
+ENGINE_SUBDIRS = {
+    "engine": "nro/netfront/core_0/Default/cfi_nocfi",
+    "engine3": "nro/netfront/core_3/Default/cfi_nncfi",
+}
 
 
 def nca_info(nstool, keys, nca):
@@ -88,9 +92,10 @@ def main():
 
     for lz4 in sorted((out / "romfs").rglob("*.nro.lz4")):
         decompress_file(lz4)
-    (out / "engine").symlink_to(pathlib.Path("romfs") / ENGINE_SUBDIR)
+    for link, sub in ENGINE_SUBDIRS.items():
+        (out / link).symlink_to(pathlib.Path("romfs") / sub)
     print(f"done: {out}")
-    print(f"run:  qemu-aarch64-static loader/build/wkc-loader --engine {out}/engine --romfs {out}/romfs")
+    print(f"run:  qemu-aarch64-static loader/build/wkc-loader-core3 --engine {out}/engine3 --romfs {out}/romfs")
 
 
 if __name__ == "__main__":

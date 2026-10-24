@@ -14,7 +14,9 @@ std::string to_std(const WKC::String& s) {
 WKCFloatRect HostChromeClient::windowRect() {
     return WKCFloatRect{0, 0, static_cast<float>(config_.width), static_cast<float>(config_.height)};
 }
-WKCFloatRect HostChromeClient::pageRect() { return windowRect(); }
+WKCFloatRect HostChromeClient::pageRect() {
+    return windowRect();
+}
 
 void HostChromeClient::addMessageToConsole(WKC::MessageSource, WKC::MessageType, WKC::MessageLevel level,
                                            const WKC::String& message, unsigned int lineNumber,
@@ -38,7 +40,9 @@ bool HostChromeClient::runJavaScriptPrompt(WKC::Frame*, const WKC::String& messa
     return true;
 }
 
-WKC::String HostFrameLoaderClient::userAgent(const WKC::KURL&) { return WKC::String(config_.user_agent.c_str()); }
+WKC::String HostFrameLoaderClient::userAgent(const WKC::KURL&) {
+    return WKC::String(config_.user_agent.c_str());
+}
 
 void HostFrameLoaderClient::dispatchDidFinishLoad() {
     if (events_.load_finished) events_.load_finished();
@@ -48,7 +52,9 @@ void HostFrameLoaderClient::dispatchDidFailLoad(const WKC::ResourceError& e) {
     if (events_.load_failed) events_.load_failed(to_std(e.failingURL()), to_std(e.localizedDescription()));
 }
 
-void HostFrameLoaderClient::dispatchDidFailProvisionalLoad(const WKC::ResourceError& e) { dispatchDidFailLoad(e); }
+void HostFrameLoaderClient::dispatchDidFailProvisionalLoad(const WKC::ResourceError& e) {
+    dispatchDidFailLoad(e);
+}
 
 void HostFrameLoaderClient::dispatchDidReceiveTitle(const WKC::String& title) {
     if (events_.title_changed) events_.title_changed(to_std(title));

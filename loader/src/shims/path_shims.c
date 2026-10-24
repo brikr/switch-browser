@@ -54,3 +54,19 @@ int nxb_remove(const char* path) {
     TRANSLATE(path, -1);
     return remove(host_);
 }
+
+int nxb_rename(const char* from, const char* to) {
+    char buf2_[PATH_MAX];
+    const char* host_to = nxb_translate_path(to, buf2_, sizeof buf2_);
+    if (!host_to) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    TRANSLATE(from, -1);
+    return rename(host_, host_to);
+}
+
+int nxb_unlink(const char* path) {
+    TRANSLATE(path, -1);
+    return unlink(host_);
+}

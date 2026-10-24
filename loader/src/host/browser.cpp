@@ -6,7 +6,9 @@
 
 #include <cstdlib>
 
+#include "cfi_gate.h"
 #include "host/media_procs.h"
+#include "host/run_loop.h"
 #include "log.h"
 
 namespace nxb {
@@ -31,15 +33,23 @@ bool Browser::initialize(size_t heap_bytes, size_t font_heap_bytes) {
 
     LOG("WKCWebKitInitialize(heap %zu MB, font heap %zu KB)", heap_bytes >> 20, font_heap_bytes >> 10);
     // virtual_memory_size = 0: "physical" mode, the engine sub-allocates from `heap_` directly.
+    gate_vtable(&memory_handler_);
+#if NXB_CORE == 0
+    gate_vtable(&timer_handler_);
     bool ok = WKC::WKCWebKitInitialize(heap_, heap_bytes, 0, font_heap_, font_heap_bytes, memory_handler_,
                                        timer_handler_);
+#else
+    bool ok = WKC::WKCWebKitInitialize(heap_, heap_bytes, 0, font_heap_, font_heap_bytes, memory_handler_);
+#endif
     LOG("WKCWebKitInitialize -> %s", ok ? "ok" : "FAILED");
+    if (ok) RunLoop::main().attach_engine();
     return ok;
 }
 
 bool Browser::create_view(const ViewConfig& config) {
     config_ = config;
     builders_ = std::make_unique<HostClientBuilders>(config_, events);
+    gate_vtable(builders_.get());
     view_ = WKC::WKCWebView::create(*builders_);
     if (!view_) {
         LOG("WKCWebView::create failed");

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <unordered_map>
 
+#include "cfi_gate.h"
 #include "host_symbols.h"
 #include "log.h"
 
@@ -21,6 +22,15 @@ alignas(4096) uint8_t g_unresolved_data[4096];
     std::fprintf(stderr, "[loader]   called from %s\n", Linker::instance().describe(caller - 4).c_str());
     std::abort();
 }
+
+// Host imports that are data, not functions (bound to their address directly, never gated).
+bool is_data_symbol(const std::string& n) {
+    return n == "stdin" || n == "stdout" || n == "stderr" || n == "_ZSt7nothrow" || n.rfind("_ZTV", 0) == 0 ||
+           n.rfind("_ZTI", 0) == 0 || n.rfind("_ZTS", 0) == 0;
+}
+
+// Functions that return twice or not at all: a marker-only gate (no shadow-stack frame).
+bool needs_jump_gate(const std::string& n) { return n == "setjmp" || n == "longjmp"; }
 
 }  // namespace
 
@@ -52,37 +62,43 @@ uintptr_t Linker::find_export(const std::string& name) const {
 uintptr_t Linker::resolve(const NroModule& from, const NroSymbol& sym) {
     (void)from;
     if (uintptr_t a = find_export(sym.name)) return a;
-    if (const void* h = find_host_symbol(sym.name.c_str())) return reinterpret_cast<uintptr_t>(h);
+    if (const void* h = find_host_symbol(sym.name.c_str())) {
+        if (is_data_symbol(sym.name)) return reinterpret_cast<uintptr_t>(h);
+        return nxb::make_gate(h, needs_jump_gate(sym.name) ? nxb::GateKind::Jump : nxb::GateKind::Full);
+    }
     if (std::find(unresolved_.begin(), unresolved_.end(), sym.name) == unresolved_.end())
         unresolved_.push_back(sym.name);
     if (sym.type == 1 /*STT_OBJECT*/) return reinterpret_cast<uintptr_t>(g_unresolved_data);
     return make_trap(sym.name);
 }
 
-// Emits: ldr x0, name; ldr x16, handler; br x16 — so the handler knows which import was hit.
+// Emits: <cfi marker>; ldr x0, name; ldr x16, handler; br x16 — so the handler knows which
+// import was hit. Returns the address after the marker.
 uintptr_t Linker::make_trap(const std::string& name) {
     static std::unordered_map<std::string, uintptr_t> traps;
     static uint8_t* page = nullptr;
     static size_t used = 4096;
     if (auto it = traps.find(name); it != traps.end()) return it->second;
-    if (used + 32 > 4096) {
+    if (used + 40 > 4096) {
         void* p = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (p == MAP_FAILED) FATAL("trap page mmap failed");
         page = static_cast<uint8_t*>(p);
         used = 0;
     }
     uint32_t* code = reinterpret_cast<uint32_t*>(page + used);
-    code[0] = 0x58000080;  // ldr x0, #16
-    code[1] = 0x580000B0;  // ldr x16, #20
-    code[2] = 0xD61F0200;  // br x16
-    code[3] = 0xD503201F;  // nop
+    code[0] = 0xe7ffdefe;  // nncfi marker
+    code[1] = 0x580000A0;  // ldr x0, #20  (-> +24)
+    code[2] = 0x580000D0;  // ldr x16, #24 (-> +32)
+    code[3] = 0xD61F0200;  // br x16
+    code[4] = 0xD503201F;  // nop
+    code[5] = 0xD503201F;  // nop
     const char* stored = strdup(name.c_str());
     void* handler = reinterpret_cast<void*>(&unresolved_import_called);
-    std::memcpy(page + used + 16, &stored, 8);
-    std::memcpy(page + used + 24, &handler, 8);
-    __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code) + 32);
-    uintptr_t addr = reinterpret_cast<uintptr_t>(code);
-    used += 32;
+    std::memcpy(page + used + 24, &stored, 8);
+    std::memcpy(page + used + 32, &handler, 8);
+    __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code) + 40);
+    uintptr_t addr = reinterpret_cast<uintptr_t>(code + 1);
+    used += 40;
     traps.emplace(name, addr);
     return addr;
 }

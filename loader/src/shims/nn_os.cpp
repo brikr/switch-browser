@@ -6,7 +6,11 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <semaphore.h>
+#include <signal.h>
 #include <sys/mman.h>
+#include <sys/random.h>
+#include <ucontext.h>
 
 #include <atomic>
 #include <chrono>
@@ -43,7 +47,23 @@ std::chrono::steady_clock::time_point deadline_after(int64_t ns) {
 
 // --- threads ---
 
+// SuspendThread/ResumeThread: the target is interrupted with kSuspendSignal; its handler saves
+// the interrupted register state and blocks until resumed. (JavaScriptCore's GC uses this to scan
+// other threads' registers and stacks.)
+constexpr int kSuspendSignal = SIGUSR2;
+
+struct SuspendState {
+    sem_t ack, resume;
+    std::atomic<int> count{0};
+    mcontext_t context;
+    SuspendState() {
+        sem_init(&ack, 0, 0);
+        sem_init(&resume, 0, 0);
+    }
+};
+
 struct HostThread {
+    SuspendState suspend;
     void (*entry)(void*) = nullptr;
     void* arg = nullptr;
     size_t stack_size = 0;
@@ -56,11 +76,13 @@ struct HostThread {
 
 SyncTable<HostThread> g_threads;
 thread_local void* t_current_thread = nullptr;  // engine ThreadType* for this host thread
+thread_local HostThread* t_host_thread = nullptr;
 
 void* thread_trampoline(void* p) {
     void* thread_type = p;
     t_current_thread = thread_type;
     HostThread& t = g_threads.get(thread_type);
+    t_host_thread = &t;
     TRACE("thread %s starting", t.name.c_str());
     t.entry(t.arg);
     return nullptr;
@@ -113,6 +135,7 @@ void* GetCurrentThread() {
         t.pthread = pthread_self();
         t.started = true;
         t_current_thread = fake;
+        t_host_thread = &t;
     }
     return t_current_thread;
 }
@@ -127,6 +150,109 @@ int GetCurrentCoreNumber() {
 uint64_t GetThreadAvailableCoreMask() { return 0b111; }
 void SleepThread(TimeSpan t) { std::this_thread::sleep_for(std::chrono::nanoseconds(t.ns)); }
 void YieldThread() { sched_yield(); }
+
+// --- suspend / resume / thread context ---
+
+void suspend_handler(int, siginfo_t*, void* uc) {
+    HostThread* self = t_host_thread;
+    if (!self) return;
+    self->suspend.context = static_cast<ucontext_t*>(uc)->uc_mcontext;
+    sem_post(&self->suspend.ack);
+    while (sem_wait(&self->suspend.resume) != 0) {
+    }
+}
+
+void install_suspend_handler() {
+    static bool done = [] {
+        struct sigaction sa {};
+        sa.sa_sigaction = suspend_handler;
+        sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigfillset(&sa.sa_mask);
+        if (sigaction(kSuspendSignal, &sa, nullptr) != 0) FATAL("sigaction failed");
+        return true;
+    }();
+    (void)done;
+}
+
+// Returns the previous suspend count.
+int SuspendThread(void* thread) {
+    install_suspend_handler();
+    HostThread& t = g_threads.get(thread);
+    int prev = t.suspend.count.fetch_add(1);
+    if (prev == 0) {
+        if (pthread_kill(t.pthread, kSuspendSignal) != 0) FATAL("SuspendThread: pthread_kill failed");
+        while (sem_wait(&t.suspend.ack) != 0) {
+        }
+    }
+    return prev;
+}
+
+int ResumeThread(void* thread) {
+    HostThread& t = g_threads.get(thread);
+    int prev = t.suspend.count.fetch_sub(1);
+    if (prev == 1) sem_post(&t.suspend.resume);
+    return prev;
+}
+
+// nn::os::ThreadContextInfoAarch64 (Horizon thread context layout).
+struct ThreadContextInfo {
+    uint64_t r[29];  // x0-x28
+    uint64_t fp, lr, sp, pc;
+    uint32_t pstate, padding;
+    unsigned __int128 v[32];
+    uint32_t fpcr, fpsr;
+};
+
+Result GetThreadContext(ThreadContextInfo* out, const void* thread) {
+    HostThread& t = g_threads.get(thread);
+    if (t.suspend.count.load() <= 0) return 1;  // only valid for suspended threads
+    const mcontext_t& mc = t.suspend.context;
+    std::memset(out, 0, sizeof *out);
+    for (int i = 0; i < 29; i++) out->r[i] = mc.regs[i];
+    out->fp = mc.regs[29];
+    out->lr = mc.regs[30];
+    out->sp = mc.sp;
+    out->pc = mc.pc;
+    out->pstate = static_cast<uint32_t>(mc.pstate);
+    // FP/SIMD state lives in a tagged record in __reserved.
+    for (size_t off = 0; off + sizeof(_aarch64_ctx) <= sizeof mc.__reserved;) {
+        auto* hdr = reinterpret_cast<const _aarch64_ctx*>(mc.__reserved + off);
+        if (hdr->magic == 0 || hdr->size == 0) break;
+        if (hdr->magic == FPSIMD_MAGIC) {
+            auto* fp = reinterpret_cast<const fpsimd_context*>(hdr);
+            std::memcpy(out->v, fp->vregs, sizeof out->v);
+            out->fpsr = fp->fpsr;
+            out->fpcr = fp->fpcr;
+            break;
+        }
+        off += hdr->size;
+    }
+    return kSuccess;
+}
+
+// --- TLS slots ---
+
+struct TlsSlot { uint32_t value; };
+
+Result AllocateTlsSlot(TlsSlot* out, void (*destructor)(uintptr_t)) {
+    pthread_key_t key;
+    if (pthread_key_create(&key, reinterpret_cast<void (*)(void*)>(destructor)) != 0) return 1;
+    out->value = key;
+    return kSuccess;
+}
+void FreeTlsSlot(TlsSlot slot) { pthread_key_delete(slot.value); }
+uintptr_t GetTlsValue(TlsSlot slot) { return reinterpret_cast<uintptr_t>(pthread_getspecific(slot.value)); }
+void SetTlsValue(TlsSlot slot, uintptr_t value) { pthread_setspecific(slot.value, reinterpret_cast<void*>(value)); }
+
+void GenerateRandomBytes(void* buf, size_t size) {
+    auto* p = static_cast<uint8_t*>(buf);
+    while (size) {
+        ssize_t n = getrandom(p, size, 0);
+        if (n <= 0) continue;
+        p += n;
+        size -= static_cast<size_t>(n);
+    }
+}
 
 // --- mutexes (optionally recursive) ---
 
@@ -310,6 +436,14 @@ HostSymbols symbols({
     {"_ZN2nn2os22GetSystemTickFrequencyEv", (void*)&GetSystemTickFrequency},
     {"_ZN2nn2os17ConvertToTimeSpanENS0_4TickE", (void*)&ConvertToTimeSpan},
     {"_ZN2nn2os19AllocateMemoryPagesEmm", (void*)&AllocateMemoryPages},
+    {"_ZN2nn2os13SuspendThreadEPNS0_10ThreadTypeE", (void*)&SuspendThread},
+    {"_ZN2nn2os12ResumeThreadEPNS0_10ThreadTypeE", (void*)&ResumeThread},
+    {"_ZN2nn2os16GetThreadContextEPNS0_24ThreadContextInfoAarch64EPKNS0_10ThreadTypeE", (void*)&GetThreadContext},
+    {"_ZN2nn2os15AllocateTlsSlotEPNS0_7TlsSlotEPFvmE", (void*)&AllocateTlsSlot},
+    {"_ZN2nn2os11FreeTlsSlotENS0_7TlsSlotE", (void*)&FreeTlsSlot},
+    {"_ZN2nn2os11GetTlsValueENS0_7TlsSlotE", (void*)&GetTlsValue},
+    {"_ZN2nn2os11SetTlsValueENS0_7TlsSlotEm", (void*)&SetTlsValue},
+    {"_ZN2nn2os19GenerateRandomBytesEPvm", (void*)&GenerateRandomBytes},
     {"_ZN2nn2os15FreeMemoryPagesEmm", (void*)&FreeMemoryPages},
 });
 

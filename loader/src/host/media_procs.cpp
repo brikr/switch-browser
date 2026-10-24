@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "cfi_gate.h"
 #include "log.h"
 
 namespace nxb {
@@ -30,6 +31,7 @@ const void* media_player_procs() {
     static auto table = [] {
         auto t = make_table(std::make_integer_sequence<int, kMediaProcCount>());
         t.procs[0] = reinterpret_cast<const void*>(&media_initialize);
+        for (auto& proc : t.procs) proc = reinterpret_cast<const void*>(make_gate(proc, GateKind::Full));
         return t;
     }();
     return table.procs;

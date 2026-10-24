@@ -28,7 +28,9 @@ public:
 
 private:
     MemoryHandler memory_handler_;
+#if NXB_CORE == 0
     TimerHandler timer_handler_;
+#endif
     ViewConfig config_;
     std::unique_ptr<HostClientBuilders> builders_;
     WKC::WKCWebView* view_ = nullptr;
