@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <string>
+
+#include <unistd.h>
 
 #include "../host_symbols.h"
 
@@ -89,10 +92,32 @@ int GetBacktrace(uintptr_t*, int) { return 0; }
 
 struct LocationName { char value[36]; };
 
+// The device's IANA time zone: NXB_TIMEZONE, else the host's (TZ, /etc/timezone, /etc/localtime).
+std::string host_timezone() {
+    if (const char* e = std::getenv("NXB_TIMEZONE"); e && *e) return e;
+    if (const char* e = std::getenv("TZ"); e && *e && std::strchr(e, '/')) return e[0] == ':' ? e + 1 : e;
+    if (FILE* f = std::fopen("/etc/timezone", "r")) {
+        char buf[64] = {};
+        bool ok = std::fgets(buf, sizeof buf, f) != nullptr;
+        std::fclose(f);
+        std::string s = ok ? buf : "";
+        while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+        if (!s.empty()) return s;
+    }
+    char link[256] = {};
+    ssize_t n = readlink("/etc/localtime", link, sizeof link - 1);
+    if (n > 0) {
+        std::string s(link, n);
+        size_t z = s.find("zoneinfo/");
+        if (z != std::string::npos) return s.substr(z + 9);
+    }
+    return "UTC";
+}
+
 void GetDeviceLocationName(LocationName* out) {
-    const char* tz = std::getenv("NXB_TIMEZONE");
+    std::string tz = host_timezone();
     std::memset(out->value, 0, sizeof out->value);
-    std::strncpy(out->value, tz && *tz ? tz : "UTC", sizeof out->value - 1);
+    std::strncpy(out->value, tz.c_str(), sizeof out->value - 1);
 }
 
 void GenerateCryptographicallyRandomBytes(void* buf, size_t size) {

@@ -46,6 +46,7 @@ const char* kDefaultHtml =
                  "  --url         load this URL instead\n"
                  "  --eval        evaluate JS in the page after it loads and print the result (repeatable)\n"
                  "  --user-agent  override the user agent\n"
+                 "  --language    navigator.language (default en-US)\n"
                  "  --device-mode console|handheld (default console): the docked/handheld state seen by the\n"
                  "                -webkit-nintendo-switch-device-mode media feature\n"
                  "  --timeout     seconds to wait for the load (default 30)\n"
@@ -81,6 +82,7 @@ int main(int argc, char** argv) {
         else if (arg("--url")) url = argv[++i];
         else if (arg("--eval")) evals.push_back(argv[++i]);
         else if (arg("--user-agent")) config.user_agent = argv[++i];
+        else if (arg("--language")) config.language = argv[++i];
         else if (arg("--device-mode")) {
             std::string m = argv[++i];
             if (m == "console") config.handheld = false;
@@ -117,6 +119,7 @@ int main(int argc, char** argv) {
     };
 
     if (!browser.initialize(size_t(256) << 20, size_t(1) << 20)) return 1;
+    browser.load_icu_data(romfs_dir);
     if (!fonts_dir.empty() && browser.register_fonts(fonts_dir) == 0) LOG("warning: no fonts registered from %s", fonts_dir.c_str());
     if (!certs_dir.empty() && browser.register_root_cas(certs_dir) == 0) LOG("warning: no root CAs registered from %s", certs_dir.c_str());
     if (!browser.create_view(config)) return 1;

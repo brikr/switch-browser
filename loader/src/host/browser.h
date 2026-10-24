@@ -14,12 +14,18 @@ class Browser {
 public:
     // Initialises the engine with a heap of `heap_bytes`. Must be called once, on the loop thread.
     bool initialize(size_t heap_bytes, size_t font_heap_bytes);
+    // Sets navigator.* strings and form button labels (WKCPrefs::setSystemStrings). Without this,
+    // navigator.language reads as "e" and the other navigator strings are empty.
+    void set_system_strings(const ViewConfig& config);
     // Creates the WebView rendering into an internal 32-bit bitmap of config.width x config.height.
     bool create_view(const ViewConfig& config);
 
     // Registers every .ttf in `dir` (the Switch system fonts from prepare_firmware.py). The standard
     // font is registered first, which makes it the engine's primary font. Returns the count.
     int register_fonts(const std::string& dir);
+    // core_3: loads ICU's common data (BrowserDll's browser/icudt*.dat, decompressed by
+    // prepare_firmware.py) and hands it to the engine. Without it, any use of Intl crashes the engine.
+    bool load_icu_data(const std::string& romfs_dir);
     // Registers every certificate in the .pem files in `dir` as a trusted root CA. Returns the count.
     int register_root_cas(const std::string& dir);
     // Paints the whole view into the offscreen bitmap and writes it as PNG.
@@ -45,7 +51,8 @@ private:
     std::vector<uint32_t> bitmap_;
     void* heap_ = nullptr;
     void* font_heap_ = nullptr;
-    std::vector<std::vector<uint8_t>> fonts_;  // must outlive the engine (registered by pointer)
+    std::vector<std::vector<uint8_t>> fonts_;
+    std::vector<uint8_t> icu_data_;  // must outlive the engine  // must outlive the engine (registered by pointer)
 };
 
 }  // namespace nxb

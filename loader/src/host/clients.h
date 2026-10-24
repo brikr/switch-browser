@@ -16,6 +16,7 @@ struct ViewConfig {
     int height = 720;
     std::string user_agent;
     bool handheld = false;  // device mode for the Switch-specific media feature (false = docked/console)
+    std::string language = "en-US";  // navigator.language
 };
 
 // Events the embedding application cares about.

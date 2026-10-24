@@ -6,6 +6,7 @@
 //     -scriptPath scripts/ghidra -postScript DecompileAt.java 0x14e93b4 0x14bf7ec ...
 //
 // Each argument is treated as a return address (the call site is the instruction before it).
+// A leading "--all" argument prints whole functions instead of the first 80 lines.
 // @category NXB
 
 import ghidra.app.decompiler.DecompInterface;
@@ -22,7 +23,12 @@ public class DecompileAt extends GhidraScript {
     protected void run() throws Exception {
         DecompInterface decomp = new DecompInterface();
         decomp.openProgram(currentProgram);
+        int maxLines = MAX_LINES;
         for (String arg : getScriptArgs()) {
+            if (arg.equals("--all")) {
+                maxLines = Integer.MAX_VALUE;
+                continue;
+            }
             long off = Long.decode(arg);
             Address callSite = toAddr(IMAGE_BASE + off - 4);
             Function f = getFunctionContaining(callSite);
@@ -38,8 +44,8 @@ public class DecompileAt extends GhidraScript {
                 continue;
             }
             String[] lines = res.getDecompiledFunction().getC().split("\n");
-            for (int i = 0; i < Math.min(lines.length, MAX_LINES); i++) println("  " + lines[i]);
-            if (lines.length > MAX_LINES) println("  ... (" + (lines.length - MAX_LINES) + " more lines)");
+            for (int i = 0; i < Math.min(lines.length, maxLines); i++) println("  " + lines[i]);
+            if (lines.length > maxLines) println("  ... (" + (lines.length - maxLines) + " more lines)");
         }
         decomp.dispose();
     }

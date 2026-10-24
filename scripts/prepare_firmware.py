@@ -5,7 +5,8 @@ Usage:
 
 --firmware is a firmware zip (as published on THZoria/NX_Firmware) or a directory of NCAs.
 Requires `nstool` on PATH. Produces:
-  <out>/romfs/           BrowserDll (0100000000000803) RomFS, with nro/*.nro decompressed
+  <out>/romfs/           BrowserDll (0100000000000803) RomFS, with nro/*.nro and the ICU data
+                         (browser/icudt*.dat) decompressed
   <out>/engine  -> romfs/nro/netfront/core_0/Default/cfi_nocfi  (--engine for wkc-loader-core0)
   <out>/engine3 -> romfs/nro/netfront/core_3/Default/cfi_nncfi  (--engine for wkc-loader-core3)
   <out>/fonts/           Switch system fonts (titles 0810-0814), decrypted from .bfttf to .ttf
@@ -155,6 +156,8 @@ def main():
 
     for lz4 in sorted((out / "romfs").rglob("*.nro.lz4")):
         decompress_file(lz4)
+    for lz4 in sorted((out / "romfs" / "browser").glob("*.dat.lz4")):
+        decompress_file(lz4, expect_nro=False)
     for link, sub in ENGINE_SUBDIRS.items():
         (out / link).symlink_to(pathlib.Path("romfs") / sub)
     print(f"done: {out}")

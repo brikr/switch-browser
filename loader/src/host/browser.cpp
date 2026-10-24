@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <string>
 #include <fstream>
 #include <iterator>
 
@@ -69,8 +70,30 @@ bool Browser::initialize(size_t heap_bytes, size_t font_heap_bytes) {
     return ok;
 }
 
+void Browser::set_system_strings(const ViewConfig& config) {
+    static std::vector<std::u16string> storage;  // the engine keeps the pointers
+    auto u16 = [](const std::string& s) {
+        storage.emplace_back(s.begin(), s.end());  // ASCII values only
+        return reinterpret_cast<const unsigned short*>(storage.back().c_str());
+    };
+    storage.reserve(16);
+    WKC::SystemStrings strings{};
+    // platform/vendor: unknown on a real Switch, so left empty (what the engine reports by default).
+    strings.fNavigatorPlatform = u16("");
+    strings.fNavigatorProduct = u16("Gecko");        // fixed by the HTML spec for all browsers
+    strings.fNavigatorProductSub = u16("20030107");  // ditto (WebKit/Blink value)
+    strings.fNavigatorVendor = u16("");
+    strings.fNavigatorVendorSub = u16("");
+    strings.fLanguage = u16(config.language);
+    strings.fButtonLabelSubmit = u16("Submit");
+    strings.fButtonLabelReset = u16("Reset");
+    strings.fButtonLabelFile = u16("Choose File");
+    WKC::WKCPrefs::setSystemStrings(&strings);
+}
+
 bool Browser::create_view(const ViewConfig& config) {
     config_ = config;
+    set_system_strings(config);
     WKC::WKCWebKitSetDeviceMode(config.handheld ? WKC::EDeviceModeHandheld : WKC::EDeviceModeConsole);
     builders_ = std::make_unique<HostClientBuilders>(config_, events);
     gate_vtable(builders_.get());
@@ -116,6 +139,32 @@ int Browser::register_fonts(const std::string& dir) {
         if (id >= 0) count++;
     }
     return count;
+}
+
+bool Browser::load_icu_data(const std::string& romfs_dir) {
+#if NXB_CORE == 3
+    std::string dir = romfs_dir + "/browser";
+    std::string file;
+    if (DIR* d = opendir(dir.c_str())) {
+        while (dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n.rfind("icudt", 0) == 0 && n.size() > 4 && n.compare(n.size() - 4, 4, ".dat") == 0) file = dir + "/" + n;
+        }
+        closedir(d);
+    }
+    if (file.empty()) {
+        LOG("warning: no ICU data in %s (re-run prepare_firmware.py); Intl will crash the engine", dir.c_str());
+        return false;
+    }
+    std::ifstream in(file, std::ios::binary);
+    icu_data_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    bool ok = WKC::WKCWebKitSetICUData(icu_data_.data());
+    LOG("ICU data %s (%zu KB) -> %s", file.c_str(), icu_data_.size() >> 10, ok ? "ok" : "FAILED");
+    return ok;
+#else
+    (void)romfs_dir;
+    return true;  // core_0 has no Intl
+#endif
 }
 
 int Browser::register_root_cas(const std::string& dir) {
