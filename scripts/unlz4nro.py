@@ -43,7 +43,7 @@ def lz4_block_decompress(src, out_size):
     return bytes(dst)
 
 
-def decompress_file(path, expect_nro=True):
+def decompress_file(path, expect_nro=True, quiet=False):
     """Decompresses <name>.lz4 (u32 LE size + raw LZ4 block) to <name>. BrowserDll uses this
     container for its NRO modules and for the ICU data (browser/icudt62l.dat.lz4)."""
     path = str(path)
@@ -54,7 +54,8 @@ def decompress_file(path, expect_nro=True):
         raise ValueError(f"{path}: no NRO0 magic")
     dest = path[:-4]
     open(dest, "wb").write(out)
-    print(f"{dest} {size}")
+    if not quiet:
+        print(f"{dest} {size}")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="$ROOT/deps"
-CROSS="${CROSS:-aarch64-linux-gnu-}"
+# Binutils prefix: none on an AArch64 Linux host, the cross toolchain's elsewhere (as in loader/Makefile).
+if [ "$(uname -m)" = aarch64 ]; then CROSS="${CROSS-}"; else CROSS="${CROSS-aarch64-linux-gnu-}"; fi
 
 DEB_URL="http://ports.ubuntu.com/ubuntu-ports/pool/universe/l/llvm-toolchain-14/libc++-14-dev_14.0.0-1ubuntu1.1_arm64.deb"
 DEB="$DEPS/download/$(basename "$DEB_URL")"
@@ -41,7 +42,12 @@ KEEP=(
 
 mkdir -p "$DEPS/download"
 [ -f "$DEB" ] || curl -fL -o "$DEB" "$DEB_URL"
-rm -rf "$PKG" && dpkg-deb -x "$DEB" "$PKG"
+rm -rf "$PKG" && mkdir -p "$PKG"
+if command -v dpkg-deb >/dev/null; then
+  dpkg-deb -x "$DEB" "$PKG"
+else  # a .deb is an ar archive holding data.tar.*
+  (cd "$PKG" && ar x "$DEB" && tar -xf data.tar.* && rm -f data.tar.* control.tar.* debian-binary)
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

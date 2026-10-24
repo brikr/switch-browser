@@ -1,14 +1,20 @@
-# Cross-builds the loader as a static Linux AArch64 binary (runs under qemu-aarch64-static on x86).
+# Builds the loader as a static Linux AArch64 binary: natively on an AArch64 Linux host, otherwise
+# with a cross toolchain (the result then runs under qemu-aarch64; see scripts/wkc.sh).
 #
-# Needs Nintendo's OSS package for the WKC headers (LGPL):
-#   OSS = extracted NintendoSwitch_OpenSources<ver>.zip (support.nintendo.com/jp/oss)
+# Needs Nintendo's OSS package for the WKC headers (LGPL), unpacked by scripts/prepare_firmware.py
+# into <firmware version dir>/oss. FIRMWARE selects the version directory; OSS overrides the path.
+ifeq ($(shell uname -m),aarch64)
+CROSS    ?=
+else
 CROSS    ?= aarch64-linux-gnu-
+endif
 CC       := $(CROSS)gcc
 CXX      := $(CROSS)g++
 NM       := $(CROSS)nm
 PYTHON   ?= python3 -I
 
-OSS      ?= $(abspath ../firmware/oss/22.5.0/NintendoSwitch_OpenSources22.5.0)
+FIRMWARE ?= ../firmware/22.5.0
+OSS      ?= $(abspath $(FIRMWARE)/oss)
 # Engine generation: 0 = core_0 (netfront 0.30.0, WebKit 601), 3 = core_3 (netfront 3.30.3, WebKit 613).
 CORE     ?= 3
 ifeq ($(CORE),0)
@@ -52,7 +58,7 @@ $(BIN): $(OBJS) $(BUILD)/engine_imports.o
 
 # Header shims: JavaScriptCore/JavaScript.h and WKC/wkcconfig.h as the WKC headers expect them.
 $(INC_STAMP):
-	@test -d $(WKC) || { echo "WKC headers not found at $(WKC); set OSS=<extracted OSS package>"; exit 1; }
+	@test -d $(WKC) || { echo "WKC headers not found at $(WKC); run scripts/prepare_firmware.py $(abspath $(FIRMWARE)) (or set OSS=)"; exit 1; }
 	mkdir -p $(BUILD)/include
 	ln -sfn $(OSS)/webkit_$(WKC_VER)/JavaScriptCore/API $(BUILD)/include/JavaScriptCore
 	ln -sfn $(WKC_FALLBACK)/wkc $(BUILD)/include/WKC
