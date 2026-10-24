@@ -1,1 +1,8 @@
 firmware/
+loader/build/
+scratch/
+nxb-data/
+__pycache__/
+analysis/
+.claude/settings.local.json
+CLAUDE.local.md
