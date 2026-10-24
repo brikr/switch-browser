@@ -8,6 +8,7 @@ const ctx = canvas.getContext("2d");
 const overlay = $("overlay");
 const urlInput = $("url");
 const logEl = $("log");
+const popupEl = $("popup");
 
 let ws = null;
 let viewWidth = 1280;
@@ -25,6 +26,7 @@ function connect() {
     overlay.hidden = true;
   };
   ws.onclose = () => {
+    closePopup();
     setStatus("disconnected — retrying", "");
     overlay.textContent = "Disconnected from the engine. Retrying…";
     overlay.hidden = false;
@@ -80,6 +82,12 @@ function onText(m) {
     case "eval":
       log(`> ${m.js}`, "result");
       log(m.result, m.threw ? "error" : "");
+      break;
+    case "popup":
+      showPopup(m);
+      break;
+    case "popup_hide":
+      closePopup();
       break;
   }
 }
@@ -146,6 +154,172 @@ $("eval").addEventListener("submit", (e) => {
   $("js").value = "";
 });
 
+// --- <select> drop-down lists ---
+
+let popup = null; // the open list's message from the host
+let popupActive = -1; // highlighted item index
+let swallowMouseUp = false; // the mouseup of a click that dismissed the list
+
+function choosable(i) {
+  const item = popup.items[i];
+  return item && item.k === "o" && item.e;
+}
+
+function showPopup(m) {
+  popup = m;
+  popupEl.textContent = "";
+  m.items.forEach((item, i) => {
+    const div = document.createElement("div");
+    if (item.k === "s") {
+      div.className = "sep";
+    } else {
+      div.className = "item";
+      div.textContent = item.l || "\u00a0";
+      if (item.k === "g") {
+        div.classList.add("group");
+      } else {
+        div.setAttribute("role", "option");
+        if (i === m.sel) div.classList.add("selected");
+      }
+      if (!item.e || item.k !== "o") div.classList.add("disabled");
+    }
+    div.dataset.index = i;
+    popupEl.appendChild(div);
+  });
+  popupEl.hidden = false;
+  layoutPopup();
+  popupActive = -1;
+  setActive(choosable(m.sel) ? m.sel : step(1, 1));
+  popupEl.focus({ preventScroll: true });
+}
+
+// Under the <select> if it fits, otherwise above it, whichever side has more room.
+function layoutPopup() {
+  if (!popup) return;
+  const scale = canvas.getBoundingClientRect().width / viewWidth;
+  popupEl.style.setProperty("--scale", scale);
+  popupEl.style.setProperty("--fs", `${popup.fs > 0 ? popup.fs : 16}px`);
+  popupEl.style.left = `${(Math.max(0, popup.x) / viewWidth) * 100}%`;
+  popupEl.style.minWidth = `${popup.w * scale}px`;
+  popupEl.style.maxWidth = `${((viewWidth - Math.max(0, popup.x)) / viewWidth) * 100}%`;
+  popupEl.style.top = popupEl.style.bottom = "";
+  const below = viewHeight - (popup.y + popup.h);
+  const above = popup.y;
+  popupEl.style.maxHeight = "";
+  const natural = popupEl.offsetHeight / scale;
+  if (natural <= below || below >= above) {
+    popupEl.style.top = `${((popup.y + popup.h) / viewHeight) * 100}%`;
+    popupEl.style.maxHeight = `${Math.max(below, 40) * scale}px`;
+  } else {
+    popupEl.style.bottom = `${((viewHeight - popup.y) / viewHeight) * 100}%`;
+    popupEl.style.maxHeight = `${Math.max(above, 40) * scale}px`;
+  }
+}
+window.addEventListener("resize", layoutPopup);
+
+function closePopup() {
+  if (!popup) return;
+  popup = null;
+  popupEl.hidden = true;
+  popupEl.textContent = "";
+  if (document.activeElement === popupEl) canvas.focus();
+}
+
+function answerPopup(i) {
+  if (!popup) return;
+  send({ t: "popup", i });
+  closePopup();
+}
+
+function setActive(i) {
+  popupActive = i;
+  for (const el of popupEl.children) el.classList.toggle("active", Number(el.dataset.index) === i);
+  const el = popupEl.children[i];
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+// The next choosable item from popupActive in direction `dir`, going at most `count` items.
+function step(dir, count) {
+  let found = popupActive;
+  for (let i = popupActive + dir; i >= 0 && i < popup.items.length && count > 0; i += dir) {
+    if (choosable(i)) {
+      found = i;
+      count--;
+    }
+  }
+  return found;
+}
+
+popupEl.addEventListener("mousemove", (e) => {
+  const el = e.target.closest(".item");
+  if (el && choosable(Number(el.dataset.index))) setActive(Number(el.dataset.index));
+});
+popupEl.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus on the list
+popupEl.addEventListener("click", (e) => {
+  const el = e.target.closest(".item");
+  if (el && choosable(Number(el.dataset.index))) answerPopup(Number(el.dataset.index));
+});
+popupEl.addEventListener("keydown", (e) => {
+  const page = Math.max(1, Math.floor(popupEl.clientHeight / (popupEl.firstElementChild?.offsetHeight || 20)) - 1);
+  switch (e.key) {
+    case "ArrowDown": setActive(step(1, 1)); break;
+    case "ArrowUp": setActive(step(-1, 1)); break;
+    case "PageDown": setActive(step(1, page)); break;
+    case "PageUp": setActive(step(-1, page)); break;
+    case "Home": popupActive = -1; setActive(step(1, 1)); break;
+    case "End": popupActive = popup.items.length; setActive(step(-1, 1)); break;
+    case "Enter":
+    case " ":
+      answerPopup(choosable(popupActive) ? popupActive : -1);
+      break;
+    case "Escape":
+    case "Tab":
+      answerPopup(-1);
+      break;
+    default:
+      // Type-ahead: the next option starting with the typed character.
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const ch = e.key.toLowerCase();
+        const n = popup.items.length;
+        for (let k = 1; k <= n; k++) {
+          const i = (popupActive + k) % n;
+          if (choosable(i) && popup.items[i].l.trim().toLowerCase().startsWith(ch)) {
+            setActive(i);
+            break;
+          }
+        }
+      }
+      break;
+  }
+  e.preventDefault();
+});
+popupEl.addEventListener("blur", () => answerPopup(-1));
+
+// A click anywhere outside the list dismisses it, and doesn't reach the page (as in desktop
+// browsers; otherwise a click on the <select> itself would reopen it straight away).
+window.addEventListener(
+  "mousedown",
+  (e) => {
+    if (!popup || popupEl.contains(e.target)) return;
+    answerPopup(-1);
+    if (e.target === canvas) {
+      swallowMouseUp = true;
+      e.stopPropagation();
+      e.preventDefault();
+      canvas.focus();
+    }
+  },
+  true,
+);
+window.addEventListener(
+  "mouseup",
+  (e) => {
+    if (swallowMouseUp && e.target === canvas) e.stopPropagation();
+    swallowMouseUp = false;
+  },
+  true,
+);
+
 // --- input forwarding ---
 
 function mods(e) {
@@ -179,6 +353,7 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
+    if (popup) return answerPopup(-1); // scrolling the page closes the list
     const scale = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? viewHeight : 1;
     // WebKit wheel deltas are positive towards the top/left (the opposite of DOM wheel events).
     send({ t: "wheel", ...viewPos(e), dx: -e.deltaX * scale, dy: -e.deltaY * scale, m: mods(e) });

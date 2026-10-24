@@ -142,6 +142,7 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
     Dirty dirty;  // touched only on the loop thread
     std::string title;
     bool loading = false;
+    std::string popup;  // the open <select> list's message, resent to a client that (re)connects
 
     auto send_state = [&] {
         server.send_text("{\"t\":\"state\",\"url\":" + json_escape(browser.current_url()) + ",\"title\":" +
@@ -193,6 +194,26 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
         server.send_text("{\"t\":\"alert\",\"msg\":" + json_escape(msg) + "}");
     };
 
+    browser.events.popup_shown = [&](const PopupMenu& menu) {
+        std::string items;
+        for (auto& item : menu.items) {
+            const char* kind = item.kind == PopupMenu::Item::Kind::Group ? "g"
+                               : item.kind == PopupMenu::Item::Kind::Separator ? "s" : "o";
+            items += std::string(items.empty() ? "" : ",") + "{\"k\":\"" + kind + "\",\"l\":" + json_escape(item.text) +
+                     ",\"e\":" + (item.enabled ? "true" : "false") + "}";
+        }
+        const WKCRect& r = menu.rect;
+        popup = "{\"t\":\"popup\",\"x\":" + std::to_string(r.fX) + ",\"y\":" + std::to_string(r.fY) +
+                ",\"w\":" + std::to_string(r.fWidth) + ",\"h\":" + std::to_string(r.fHeight) +
+                ",\"sel\":" + std::to_string(menu.selected) + ",\"fs\":" + std::to_string(menu.font_size) +
+                ",\"items\":[" + items + "]}";
+        server.send_text(popup);
+    };
+    browser.events.popup_hidden = [&] {
+        popup.clear();
+        server.send_text("{\"t\":\"popup_hide\"}");
+    };
+
     // Unimplemented host features the page touched; shown as warnings in the UI console.
     auto send_stub = [&server](const std::string& name) {
         server.send_text("{\"t\":\"stub\",\"name\":" + json_escape(name) + "}");
@@ -238,6 +259,8 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
                 std::string result = browser.evaluate(js, &threw);
                 server.send_text("{\"t\":\"eval\",\"js\":" + json_escape(js) + ",\"result\":" + json_escape(result) +
                                  ",\"threw\":" + (threw ? "true" : "false") + "}");
+            } else if (t == "popup") {
+                browser.popup_choose(num(m, "i", -1));
             } else if (t == "refresh") {
                 dirty.add(WKCRect{0, 0, browser.width(), browser.height()});
             }
@@ -248,6 +271,7 @@ int run_interactive(Browser& browser, const ServeOptions& opts) {
         loop.post([&] {
             send_state();
             send_url();
+            if (!popup.empty()) server.send_text(popup);
             for (auto& s : stub_counts())  // ones hit before this client connected
                 if (!s.expected) send_stub(s.name);
             dirty.add(WKCRect{0, 0, browser.width(), browser.height()});

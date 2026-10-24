@@ -48,6 +48,8 @@ public:
     void reload();
     void stop();
     void set_device_mode(bool handheld);
+    // Answers the open <select> list (ViewEvents::popup_shown): a list index, or -1 to dismiss it.
+    void popup_choose(int index);
     std::string current_url();
     // Paints `rect` into the offscreen bitmap and returns it as RGBA8 (rect is clipped to the view).
     std::vector<uint8_t> paint_rgba(WKCRect& rect);

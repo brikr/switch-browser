@@ -111,3 +111,20 @@ button:disabled { opacity: .4; cursor: default; }
   .address { order: 10; flex-basis: 100%; }
 }
 .log .stub { font-style: italic; }
+
+/* <select> drop-down list, drawn by the UI at the element's position (the engine draws only the
+   closed control). Sizes are in view pixels times --scale, the canvas's on-screen scale. */
+.popup {
+  position: absolute; z-index: 2; overflow-y: auto; outline: none;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.3);
+  font-size: calc(var(--fs, 16px) * var(--scale, 1)); line-height: 1.3;
+}
+.popup[hidden] { display: none; }
+/* white-space: pre keeps the indent the engine gives options inside an <optgroup>. */
+.popup .item { padding: .2em .6em; white-space: pre; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.popup .item.group { font-weight: 600; }
+.popup .item.disabled { opacity: .45; }
+.popup .item.selected { font-weight: 600; }
+.popup .item.active { background: var(--accent); color: #fff; }
+.popup .sep { height: 1px; margin: .25em 0; background: var(--border); }

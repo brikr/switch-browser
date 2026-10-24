@@ -280,6 +280,10 @@ void Browser::set_device_mode(bool handheld) {
     if (events.repaint) events.repaint(WKCRect{0, 0, config_.width, config_.height});
 }
 
+void Browser::popup_choose(int index) {
+    if (HostDropDownListClient* dropdown = builders_ ? builders_->dropdown() : nullptr) dropdown->choose(index);
+}
+
 std::string Browser::current_url() {
     const char* u = view_->uri();
     return u ? u : "";

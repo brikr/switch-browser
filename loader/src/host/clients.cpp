@@ -7,9 +7,11 @@
 #include <helpers/WKCEditor.h>
 #include <helpers/WKCEventTarget.h>
 #include <helpers/WKCFrame.h>
+#include <helpers/WKCFrameView.h>
 #include <helpers/WKCHistoryItem.h>
 #include <helpers/WKCKeyboardEvent.h>
 #include <helpers/WKCNode.h>
+#include <helpers/WKCPopupMenuClient.h>
 #include <helpers/WKCResourceError.h>
 
 #include "host/run_loop.h"
@@ -311,6 +313,62 @@ void HostBackForwardList::close() {
     for (auto* item : items_) WKC::HistoryItem::destroy(item);
     items_.clear();
     current_ = -1;
+}
+
+}  // namespace nxb
+
+namespace nxb {
+
+void HostDropDownListClient::show(const WKCRect& r, WKC::FrameView* view, int index, WKC::PopupMenuClient* client) {
+    // `r` is in the coordinates of the frame's document; `view` is only valid during this call.
+    rect_ = view ? view->contentsToWindow(r) : r;
+    active_ = client;
+    if (!events_.popup_shown) {
+        choose(-1);  // nothing can show it; don't leave the <select> stuck open
+        return;
+    }
+    publish(index);
+}
+
+void HostDropDownListClient::hide(WKC::PopupMenuClient* client) {
+    // The engine calls popupDidHide itself here; the client may already be half destroyed.
+    if (!active_ || client != active_) return;
+    active_ = nullptr;
+    if (events_.popup_hidden) events_.popup_hidden();
+}
+
+void HostDropDownListClient::updateFromElement(WKC::PopupMenuClient* client) {
+    if (client == active_ && active_) publish(client->selectedIndex());
+}
+
+void HostDropDownListClient::publish(int selected) {
+    PopupMenu menu;
+    menu.rect = rect_;
+    menu.selected = selected;
+    menu.font_size = active_->menuStyle_font_height();
+    int n = active_->listSize();
+    for (int i = 0; i < n; i++) {
+        PopupMenu::Item item;
+        if (active_->itemIsSeparator(i)) item.kind = PopupMenu::Item::Kind::Separator;
+        else if (active_->itemIsLabel(i)) item.kind = PopupMenu::Item::Kind::Group;
+        item.text = to_std(active_->itemText(i));
+        item.enabled = active_->itemIsEnabled(i);
+        menu.items.push_back(std::move(item));
+    }
+    events_.popup_shown(menu);
+}
+
+void HostDropDownListClient::choose(int index) {
+    WKC::PopupMenuClient* client = active_;
+    if (!client) return;
+    active_ = nullptr;
+    if (events_.popup_hidden) events_.popup_hidden();
+    // Labels, separators and disabled options can't be chosen (the engine doesn't check).
+    if (index >= client->listSize() || (index >= 0 && !client->itemIsEnabled(index))) index = -1;
+    // The order of WebKit's own ports: popupDidHide, then valueChanged. valueChanged fires the
+    // change event, whose handlers may remove the <select> and with it `client`.
+    client->popupDidHide();
+    if (index >= 0) client->valueChanged(static_cast<unsigned>(index), true);
 }
 
 }  // namespace nxb

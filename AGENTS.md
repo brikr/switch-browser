@@ -204,6 +204,13 @@ Each of these was found the hard way; the real applet must do the same.
 - **Keyboard editing is the embedder's job:** `EditorClientIf::handleKeyboardEvent` turns key
   events into `Editor::insertText` and editor commands (`HostEditorClient`). Keys are Windows VK
   codes; text arrives as separate character events.
+- **`<select>` lists are the embedder's job** (`HostDropDownListClient`, the same on both cores):
+  - `show()` gives a rect in the frame's document coordinates (convert with
+    `FrameView::contentsToWindow` during the call) and a `PopupMenuClient` that stays valid until `hide()`.
+  - Item text already carries the engine's indent for options inside an `<optgroup>`.
+  - To answer, call `popupDidHide()`, then `valueChanged(index, true)`, which fires `input` and `change`.
+    Until `popupDidHide()`, the engine treats the list as open and won't reopen it.
+  - Without a UI (no `popup_shown` handler), lists close as soon as they open.
 - **Wheel (core_3):** `notifyMouseWheel` only dispatches the DOM event. If the page doesn't cancel
   it, the host scrolls with `notifyScroll`; inner scrollable elements don't scroll yet.
 - **Console (core_3):** `addMessageToConsole` carries only the first argument.
@@ -286,7 +293,7 @@ NintendoBrowser/5.1.0.55481` (the default).
 ## Known gaps and open questions
 
 - **Not implemented:**
-  - `<select>` popups (`DropDownListClientIf`), clipboard (pasteboard procs), IME.
+  - Clipboard (pasteboard procs), IME.
   - Dialogs in the UI: alerts are logged, `confirm` returns true.
   - Cursor shapes, scrolling inner elements with the wheel, media playback, persistent
     storage and cookies.

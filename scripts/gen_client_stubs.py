@@ -176,6 +176,10 @@ NOOP_OK = {
     "ChromeClientIf::elementDidFocus",
     "ChromeClientIf::elementDidRefocus",
     "ChromeClientIf::shouldDispatchFakeMouseMoveEvents",  # false: hover isn't re-evaluated after scrolling
+    # <select> text direction. false = the closed control follows the CSS direction/text-align, like
+    # WebKit2 (the Switch's values are unknown); the second only styles popup items, which the UI ignores.
+    "ChromeClientIf::selectItemWritingDirectionIsNatural",
+    "ChromeClientIf::selectItemAlignmentFollowsMenuWritingDirection",
     "ChromeClientIf::focusedFrameChanged",
     "ChromeClientIf::focusedNodeChanged",
     "ChromeClientIf::scheduleRenderingUpdate",

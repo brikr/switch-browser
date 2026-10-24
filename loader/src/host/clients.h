@@ -23,6 +23,19 @@ struct ViewConfig {
     std::string user_style_sheet;    // URL (usually data:) of the user style sheet, or empty
 };
 
+// A <select> drop-down list, as handed to the UI to draw (the engine draws only the closed control).
+struct PopupMenu {
+    struct Item {
+        enum class Kind { Option, Group, Separator } kind = Kind::Option;  // <option>, <optgroup> label, <hr>
+        std::string text;
+        bool enabled = true;  // false for disabled options, and for options in a disabled group
+    };
+    WKCRect rect{};    // the <select> element, in view coordinates
+    int selected = -1;  // list index
+    int font_size = 0;  // pixels, from the element's style
+    std::vector<Item> items;
+};
+
 // Events the embedding application cares about.
 struct ViewEvents {
     std::function<void(const std::string& message, unsigned line, const std::string& source, int level)> console;
@@ -33,6 +46,10 @@ struct ViewEvents {
     std::function<void(const WKCRect& rect)> repaint;  // area of the view that needs painting
     std::function<void()> load_started;
     std::function<void()> location_changed;            // committed load or same-document navigation
+    // A drop-down list opened, or its contents changed while open. The UI answers with
+    // Browser::popup_choose. Without a handler, lists close again as soon as they open.
+    std::function<void(const PopupMenu& menu)> popup_shown;
+    std::function<void()> popup_hidden;  // closed by the engine (element removed, navigation)
 };
 
 std::string to_std(const WKC::String& s);
@@ -66,6 +83,11 @@ public:
         if (events_.repaint) events_.repaint(clipRect);
     }
     unsigned int underlayColor() const override { return 0xFFFFFFFF; }
+#if NXB_CORE == 0
+    // Asked before a <select> opens its list; true would mean another popup blocks it. The UI
+    // keeps clicks from reaching the page while a list is open, so there is never one.
+    bool hasOpenedPopup() override { return false; }
+#endif
 
 private:
     // core_3 reports a console API call twice: addMessageToConsole with the first argument as
@@ -172,6 +194,28 @@ public:
     void handleKeyboardEvent(WKC::KeyboardEvent* event) override;
 };
 
+// <select> drop-down lists. The engine only asks the embedder to show a list (show) and tells it
+// when the list must go (hide); the embedder draws it, reports the choice (valueChanged) and that
+// the list closed (popupDidHide). Until popupDidHide, the engine treats the list as still open and
+// a click on the <select> won't open it again.
+class HostDropDownListClient : public WKC::StubDropDownListClientIf {
+public:
+    explicit HostDropDownListClient(ViewEvents& events) : events_(events) {}
+    void dropDownListDestroyed() override { active_ = nullptr; }
+    void show(const WKCRect& r, WKC::FrameView* view, int index, WKC::PopupMenuClient* client) override;
+    void hide(WKC::PopupMenuClient* client) override;
+    void updateFromElement(WKC::PopupMenuClient* client) override;
+
+    // The user's answer for the open list: a list index to select, or -1 to close it unchanged.
+    void choose(int index);
+
+private:
+    void publish(int selected);
+    ViewEvents& events_;
+    WKC::PopupMenuClient* active_ = nullptr;  // valid until the engine calls hide() for it
+    WKCRect rect_{};
+};
+
 // Web Storage (localStorage / sessionStorage) for one origin. The engine keeps no storage itself;
 // without a working client sessionStorage drops every write and localStorage is null. Items live in
 // memory, shared by every area created for the same origin and type (so they survive navigations
@@ -252,7 +296,14 @@ public:
     WKC::EditorClientIf* createEditorClient(WKC::WKCWebView*) override { return gate_vtable(new HostEditorClient()); }
     void deleteEditorClient(WKC::EditorClientIf* c) override { delete static_cast<HostEditorClient*>(c); }
     NXB_STUB_CLIENT(InspectorClientIf, InspectorClient)
-    NXB_STUB_CLIENT(DropDownListClientIf, DropDownListClient)
+    WKC::DropDownListClientIf* createDropDownListClient(WKC::WKCWebView*) override {
+        dropdown_ = gate_vtable(new HostDropDownListClient(events_));
+        return dropdown_;
+    }
+    void deleteDropDownListClient(WKC::DropDownListClientIf* c) override {
+        if (c == dropdown_) dropdown_ = nullptr;
+        delete static_cast<HostDropDownListClient*>(c);
+    }
     NXB_STUB_CLIENT(GeolocationClientIf, GeolocationClient)
     NXB_STUB_CLIENT(DeviceMotionClientIf, DeviceMotionClient)
     NXB_STUB_CLIENT(DeviceOrientationClientIf, DeviceOrientationClient)
@@ -277,7 +328,10 @@ public:
     }
     void deleteStorageAreaClient(WKC::StorageAreaIf* c) override { delete static_cast<HostStorageArea*>(c); }
 
+    HostDropDownListClient* dropdown() const { return dropdown_; }
+
 private:
+    HostDropDownListClient* dropdown_ = nullptr;  // the (single) view's
     const ViewConfig& config_;
     ViewEvents& events_;
 };
