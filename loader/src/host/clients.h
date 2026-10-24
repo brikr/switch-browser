@@ -15,6 +15,7 @@ struct ViewConfig {
     int width = 1280;
     int height = 720;
     std::string user_agent;
+    bool handheld = false;  // device mode for the Switch-specific media feature (false = docked/console)
 };
 
 // Events the embedding application cares about.
@@ -68,7 +69,8 @@ public:
     bool dispatchWillAcceptCookie(bool, WKC::ResourceHandle*, const char*, const char*, const char*) override { return true; }
 #endif
     bool dispatchWillReceiveData(WKC::ResourceHandle*, int) override { return true; }
-    bool notifySSLHandshakeStatus(WKC::ResourceHandle*, WKC::SSLHandshakeStatus) override { return true; }
+    // true would mean "reload the request" (the engine retries forever).
+    bool notifySSLHandshakeStatus(WKC::ResourceHandle*, WKC::SSLHandshakeStatus) override { return false; }
     int dispatchWillPermitSendRequest(void*, const char*, WKC::ContentComposition, bool,
                                       const WKC::ResourceResponse&) override { return 1; }  // allow
     WKC::String userAgent(const WKC::KURL&) override;

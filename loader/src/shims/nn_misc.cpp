@@ -50,7 +50,9 @@ Result ToCalendarTime(CalendarTime* out, CalendarAdditionalInfo* info, const Pos
         std::memset(&info->time_zone, 0, sizeof info->time_zone);
         std::strncpy(info->time_zone.standard_time_name, tm.tm_zone ? tm.tm_zone : "UTC",
                      sizeof info->time_zone.standard_time_name - 1);
-        info->time_zone.is_daylight_saving_time = tm.tm_isdst > 0;
+        // Report the full current offset with DST cleared: the engine's time peer snapshots this once
+        // and subtracts extra hours when the DST flag is set (measured: offset - 7200 for PDT/BST).
+        info->time_zone.is_daylight_saving_time = false;
         info->time_zone.utc_offset_seconds = static_cast<int32_t>(tm.tm_gmtoff);
     }
     return 0;

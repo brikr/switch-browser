@@ -2,7 +2,7 @@
 //
 // The engine (through peer_wkc, which passes values straight through) uses the Switch's
 // FreeBSD-derived ABI: sockaddr has a length byte, and constants (families, socket options,
-// message flags, errno values, ioctls) use BSD numbering. Everything is translated here.
+// message flags, ioctls) use BSD numbering. Errno values are the exception: Linux numbering.
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -20,9 +20,12 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "../host_symbols.h"
 #include "../log.h"
+#include "dns.h"
 
 namespace {
 
@@ -37,42 +40,14 @@ constexpr uint32_t kFionbio = 0x8004667e, kFionread = 0x4004667f;
 thread_local int t_last_error = 0;  // nn::socket::GetLastError() value (BSD errno)
 thread_local int t_h_errno = 0;
 
-int bsd_errno(int e) {
-    switch (e) {
-        case EAGAIN: return 35;
-        case EINPROGRESS: return 36;
-        case EALREADY: return 37;
-        case ENOTSOCK: return 38;
-        case EDESTADDRREQ: return 39;
-        case EMSGSIZE: return 40;
-        case EPROTOTYPE: return 41;
-        case ENOPROTOOPT: return 42;
-        case EPROTONOSUPPORT: return 43;
-        case EOPNOTSUPP: return 45;
-        case EAFNOSUPPORT: return 47;
-        case EADDRINUSE: return 48;
-        case EADDRNOTAVAIL: return 49;
-        case ENETDOWN: return 50;
-        case ENETUNREACH: return 51;
-        case ENETRESET: return 52;
-        case ECONNABORTED: return 53;
-        case ECONNRESET: return 54;
-        case ENOBUFS: return 55;
-        case EISCONN: return 56;
-        case ENOTCONN: return 57;
-        case ESHUTDOWN: return 58;
-        case ETIMEDOUT: return 60;
-        case ECONNREFUSED: return 61;
-        case EHOSTDOWN: return 64;
-        case EHOSTUNREACH: return 65;
-        default: return e;  // 1..34 are identical
-    }
-}
+// nn::socket::Errno uses Linux numbering (verified: the engine waits for EINPROGRESS == 115 after a
+// non-blocking connect), even though socket levels/options/flags use BSD values.
+int nn_errno(int e) { return e; }
 
 // Records errno for GetLastError when a call fails.
 template <typename T>
 T check(T rc) {
-    if (rc < 0) t_last_error = bsd_errno(errno);
+    if (rc < 0) t_last_error = nn_errno(errno);
     else t_last_error = 0;
     return rc;
 }
@@ -184,7 +159,9 @@ int Bind(int fd, const void* addr, uint32_t len) {
 int Connect(int fd, const void* addr, uint32_t len) {
     sockaddr_storage h;
     socklen_t hl = to_host_addr(addr, len, &h);
-    return check(::connect(fd, reinterpret_cast<sockaddr*>(&h), hl));
+    int rc = check(::connect(fd, reinterpret_cast<sockaddr*>(&h), hl));
+    TRACE("connect(%d, family %d, len %u) = %d (errno %d)", fd, h.ss_family, len, rc, t_last_error);
+    return rc;
 }
 
 int Accept(int fd, void* addr, uint32_t* len) {
@@ -206,8 +183,22 @@ int get_name(NameFn fn, int fd, void* addr, uint32_t* len) {
 int GetSockName(int fd, void* addr, uint32_t* len) { return get_name(::getsockname, fd, addr, len); }
 int GetPeerName(int fd, void* addr, uint32_t* len) { return get_name(::getpeername, fd, addr, len); }
 
-ssize_t Send(int fd, const void* buf, size_t n, int flags) { return check(::send(fd, buf, n, host_msg_flags(flags))); }
-ssize_t Recv(int fd, void* buf, size_t n, int flags) { return check(::recv(fd, buf, n, host_msg_flags(flags) & ~MSG_NOSIGNAL)); }
+ssize_t Send(int fd, const void* buf, size_t n, int flags) {
+    ssize_t rc = check(::send(fd, buf, n, host_msg_flags(flags)));
+    TRACE("send(%d, %zu, flags %#x) = %zd (errno %d)", fd, n, flags, rc, t_last_error);
+    if (trace_enabled()) {
+        const auto* b = static_cast<const uint8_t*>(buf);
+        char hex[3 * 48 + 1] = {};
+        for (size_t i = 0; i < n && i < 48; i++) std::snprintf(hex + 3 * i, 4, "%02x ", b[i]);
+        TRACE("  send bytes: %s", hex);
+    }
+    return rc;
+}
+ssize_t Recv(int fd, void* buf, size_t n, int flags) {
+    ssize_t rc = check(::recv(fd, buf, n, host_msg_flags(flags) & ~MSG_NOSIGNAL));
+    TRACE("recv(%d, %zu, flags %#x) = %zd (errno %d)", fd, n, flags, rc, t_last_error);
+    return rc;
+}
 
 ssize_t SendTo(int fd, const void* buf, size_t n, int flags, const void* addr, uint32_t len) {
     sockaddr_storage h;
@@ -241,9 +232,10 @@ int GetSockOpt(int fd, int level, int opt, void* val, uint32_t* len) {
     socklen_t l = *len;
     int rc = check(::getsockopt(fd, hl, ho, val, &l));
     *len = l;
+    TRACE("getsockopt(%d, %#x, %#x) = %d (value %d)", fd, level, opt, rc, l >= sizeof(int) ? *static_cast<int*>(val) : -1);
     if (rc == 0 && hl == SOL_SOCKET && ho == SO_ERROR && l >= sizeof(int)) {
         int* e = static_cast<int*>(val);
-        *e = bsd_errno(*e);
+        *e = nn_errno(*e);  // SO_ERROR
     }
     return rc;
 }
@@ -287,33 +279,57 @@ int Poll(PollFd* fds, unsigned long n, int timeout) {
         fds[i].events = bsd_poll_events(fds[i].events);
         fds[i].revents = bsd_poll_events(fds[i].revents);
     }
+    TRACE("poll(n=%lu, timeout=%d) = %d (fd0=%d revents=%#x)", n, timeout, rc, n ? fds[0].fd : -1, n ? fds[0].revents : 0);
     return rc;
 }
 
 // FdSet is 1024 bits in both ABIs, with the same bit order on little-endian.
-int Select(int n, fd_set* r, fd_set* w, fd_set* e, timeval* tv) { return check(::select(n, r, w, e, tv)); }
+int Select(int n, fd_set* r, fd_set* w, fd_set* e, timeval* tv) {
+    TRACE("select(n=%d, r=%d w=%d e=%d, tv=%ld.%06ld)", n, r != nullptr, w != nullptr, e != nullptr,
+          tv ? (long)tv->tv_sec : -1L, tv ? (long)tv->tv_usec : 0L);
+    int rc = check(::select(n, r, w, e, tv));
+    TRACE("select -> %d", rc);
+    return rc;
+}
 
 // --- resolver ---
 
-// HostEnt matches struct hostent's layout; only h_addrtype needs translating.
-thread_local hostent t_hostent;
-hostent* translated_hostent(hostent* h) {
-    if (!h) {
-        t_h_errno = h_errno;
-        return nullptr;
-    }
-    t_hostent = *h;
-    t_hostent.h_addrtype = bsd_family(h->h_addrtype);
-    return &t_hostent;
-}
+// HostEnt matches struct hostent's layout. Lookups use the built-in resolver (dns.cpp), not glibc's
+// NSS-based gethostbyname, so the static binary doesn't need NSS modules at runtime.
+struct HostEntStorage {
+    hostent ent{};
+    std::string name;
+    std::vector<in_addr> addrs;
+    std::vector<char*> addr_ptrs;
+    char* aliases[1] = {nullptr};
+};
+thread_local HostEntStorage t_hostent;
 
 hostent* GetHostEntByName(const char* name, const void*, size_t) {
-    TRACE("gethostbyname(%s)", name);
-    return translated_hostent(::gethostbyname(name));
+    int err = 0;
+    auto addrs = nxb::resolve_ipv4(name ? name : "", &err);
+    TRACE("gethostbyname(%s) -> %zu", name ? name : "(null)", addrs.size());
+    if (addrs.empty()) {
+        t_h_errno = err ? err : HOST_NOT_FOUND;
+        return nullptr;
+    }
+    HostEntStorage& h = t_hostent;
+    h.name = name;
+    h.addrs = std::move(addrs);
+    h.addr_ptrs.clear();
+    for (auto& a : h.addrs) h.addr_ptrs.push_back(reinterpret_cast<char*>(&a));
+    h.addr_ptrs.push_back(nullptr);
+    h.ent.h_name = &h.name[0];
+    h.ent.h_aliases = h.aliases;
+    h.ent.h_addrtype = kAfInet;
+    h.ent.h_length = 4;
+    h.ent.h_addr_list = h.addr_ptrs.data();
+    return &h.ent;
 }
 
-hostent* GetHostEntByAddr(const void* addr, uint32_t len, int family) {
-    return translated_hostent(::gethostbyaddr(addr, len, host_family(family)));
+hostent* GetHostEntByAddr(const void*, uint32_t, int) {
+    t_h_errno = HOST_NOT_FOUND;  // reverse lookups aren't supported
+    return nullptr;
 }
 
 int* GetHError() { return &t_h_errno; }

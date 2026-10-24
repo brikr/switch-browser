@@ -17,6 +17,14 @@ public:
     // Creates the WebView rendering into an internal 32-bit bitmap of config.width x config.height.
     bool create_view(const ViewConfig& config);
 
+    // Registers every .ttf in `dir` (the Switch system fonts from prepare_firmware.py). The standard
+    // font is registered first, which makes it the engine's primary font. Returns the count.
+    int register_fonts(const std::string& dir);
+    // Registers every certificate in the .pem files in `dir` as a trusted root CA. Returns the count.
+    int register_root_cas(const std::string& dir);
+    // Paints the whole view into the offscreen bitmap and writes it as PNG.
+    bool screenshot(const std::string& png_path);
+
     void load_html(const std::string& html, const std::string& base_uri);
     bool load_url(const std::string& url);
     // Evaluates `script` in the main frame. Returns the result (or exception) converted to a string.
@@ -37,6 +45,7 @@ private:
     std::vector<uint32_t> bitmap_;
     void* heap_ = nullptr;
     void* font_heap_ = nullptr;
+    std::vector<std::vector<uint8_t>> fonts_;  // must outlive the engine (registered by pointer)
 };
 
 }  // namespace nxb

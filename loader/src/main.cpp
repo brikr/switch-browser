@@ -19,10 +19,18 @@ namespace {
 // Dependencies first: webkit_wkc imports from all others; peer_wkc from oss/cairo/libfont.
 const std::vector<std::string> kModules = {"oss_wkc", "cairo_wkc", "libfont", "peer_wkc", "webkit_wkc"};
 
-// Approximate; the exact string the web applet sends hasn't been recovered yet.
+// The applet builds the user agent itself (no UA text exists in the engine). core_3's default is a
+// string observed from a real Switch (another seen: "... NF/7.0.3.12.11 NintendoBrowser/5.2.0.55481",
+// probably a newer firmware); core_0's is an older-format approximation.
+#if NXB_CORE == 3
+const char* kDefaultUserAgent =
+    "Mozilla/5.0 (Nintendo Switch; WebApplet) AppleWebKit/613.0 (KHTML, like Gecko) NF/6.0.3.31.11 "
+    "NintendoBrowser/5.1.0.55481";
+#else
 const char* kDefaultUserAgent =
     "Mozilla/5.0 (Nintendo Switch; WebApplet) AppleWebKit/601.6 (KHTML, like Gecko) NF/4.0.0.5.10 "
     "NintendoBrowser/5.1.0.13343";
+#endif
 
 const char* kDefaultHtml =
     "<!doctype html><html><head><title>wkc-loader</title></head><body>"
@@ -38,7 +46,12 @@ const char* kDefaultHtml =
                  "  --url         load this URL instead\n"
                  "  --eval        evaluate JS in the page after it loads and print the result (repeatable)\n"
                  "  --user-agent  override the user agent\n"
+                 "  --device-mode console|handheld (default console): the docked/handheld state seen by the\n"
+                 "                -webkit-nintendo-switch-device-mode media feature\n"
                  "  --timeout     seconds to wait for the load (default 30)\n"
+                 "  --fonts       directory of .ttf fonts to register (prepare_firmware.py's <out>/fonts)\n"
+                 "  --screenshot  write the rendered page to this PNG file after loading\n"
+                 "  --certs       directory of .pem root CAs to trust (prepare_firmware.py's <out>/certs)\n"
                  "env: NXB_DATA (writable mounts, default ./nxb-data), NXB_TRACE=1 (verbose)\n",
                  argv0, kModules[0].c_str());
     std::exit(2);
@@ -55,7 +68,7 @@ std::string read_file(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string engine_dir, romfs_dir, html_path, url;
+    std::string engine_dir, romfs_dir, html_path, url, fonts_dir, screenshot_path, certs_dir;
     std::vector<std::string> evals;
     nxb::ViewConfig config;
     config.user_agent = kDefaultUserAgent;
@@ -68,7 +81,16 @@ int main(int argc, char** argv) {
         else if (arg("--url")) url = argv[++i];
         else if (arg("--eval")) evals.push_back(argv[++i]);
         else if (arg("--user-agent")) config.user_agent = argv[++i];
+        else if (arg("--device-mode")) {
+            std::string m = argv[++i];
+            if (m == "console") config.handheld = false;
+            else if (m == "handheld") config.handheld = true;
+            else usage(argv[0]);
+        }
         else if (arg("--timeout")) timeout_s = std::atoi(argv[++i]);
+        else if (arg("--fonts")) fonts_dir = argv[++i];
+        else if (arg("--screenshot")) screenshot_path = argv[++i];
+        else if (arg("--certs")) certs_dir = argv[++i];
         else usage(argv[0]);
     }
     if (engine_dir.empty() || romfs_dir.empty()) usage(argv[0]);
@@ -95,6 +117,8 @@ int main(int argc, char** argv) {
     };
 
     if (!browser.initialize(size_t(256) << 20, size_t(1) << 20)) return 1;
+    if (!fonts_dir.empty() && browser.register_fonts(fonts_dir) == 0) LOG("warning: no fonts registered from %s", fonts_dir.c_str());
+    if (!certs_dir.empty() && browser.register_root_cas(certs_dir) == 0) LOG("warning: no root CAs registered from %s", certs_dir.c_str());
     if (!browser.create_view(config)) return 1;
 
     if (!url.empty()) browser.load_url(url);
@@ -106,6 +130,8 @@ int main(int argc, char** argv) {
     else
         LOG("page %s", loaded ? "loaded" : "failed");
     loop.run_until_idle(std::chrono::milliseconds(200), std::chrono::seconds(2));
+
+    if (!screenshot_path.empty()) browser.screenshot(screenshot_path);
 
     for (auto& js : evals) {
         bool threw = false;
