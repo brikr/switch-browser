@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Switch Browser</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <button id="back" title="Back (Alt+Left)" aria-label="Back">&#x2190;</button>
+    <button id="fwd" title="Forward (Alt+Right)" aria-label="Forward">&#x2192;</button>
+    <button id="reload" title="Reload" aria-label="Reload">&#x21bb;</button>
+    <form id="nav" class="address">
+      <input id="url" type="text" spellcheck="false" autocomplete="off" placeholder="Enter a URL" aria-label="Address">
+    </form>
+    <div class="segmented" role="group" aria-label="Device mode">
+      <button id="mode-console" class="active" title="Docked: -webkit-nintendo-switch-device-console">Docked</button>
+      <button id="mode-handheld" title="Handheld: -webkit-nintendo-switch-device-handheld">Handheld</button>
+    </div>
+    <button id="shot" title="Save a PNG of the current view">Screenshot</button>
+    <button id="toggle-console" title="Show or hide the console">Console</button>
+  </header>
+
+  <main class="stage">
+    <div class="screen-wrap">
+      <canvas id="screen" width="1280" height="720" tabindex="0" aria-label="Switch browser view"></canvas>
+      <div id="overlay" class="overlay">Connecting to the engine…</div>
+    </div>
+  </main>
+
+  <section id="console" class="console">
+    <div id="log" class="log" aria-live="polite"></div>
+    <form id="eval" class="eval">
+      <span class="prompt">&gt;</span>
+      <input id="js" type="text" spellcheck="false" autocomplete="off" placeholder="Evaluate JavaScript in the page" aria-label="JavaScript">
+    </form>
+  </section>
+
+  <footer class="status">
+    <span id="status-dot" class="dot"></span>
+    <span id="status">disconnected</span>
+    <span class="spacer"></span>
+    <span id="engine"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

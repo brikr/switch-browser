@@ -10,6 +10,7 @@
 
 #include "engine_imports.h"
 #include "host/browser.h"
+#include "host/interactive.h"
 #include "host/run_loop.h"
 #include "linker.h"
 #include "log.h"
@@ -53,6 +54,9 @@ const char* kDefaultHtml =
                  "  --fonts       directory of .ttf fonts to register (prepare_firmware.py's <out>/fonts)\n"
                  "  --screenshot  write the rendered page to this PNG file after loading\n"
                  "  --certs       directory of .pem root CAs to trust (prepare_firmware.py's <out>/certs)\n"
+                 "  --serve PORT  interactive mode: serve the browser UI (--ui-dir) on http://127.0.0.1:PORT/\n"
+                 "  --listen-all  with --serve, listen on all interfaces instead of 127.0.0.1\n"
+                 "  --ui-dir      directory with the UI files (default: frontend)\n"
                  "env: NXB_DATA (writable mounts, default ./nxb-data), NXB_TRACE=1 (verbose)\n",
                  argv0, kModules[0].c_str());
     std::exit(2);
@@ -70,6 +74,8 @@ std::string read_file(const std::string& path) {
 
 int main(int argc, char** argv) {
     std::string engine_dir, romfs_dir, html_path, url, fonts_dir, screenshot_path, certs_dir;
+    nxb::ServeOptions serve;
+    bool serving = false;
     std::vector<std::string> evals;
     nxb::ViewConfig config;
     config.user_agent = kDefaultUserAgent;
@@ -93,6 +99,9 @@ int main(int argc, char** argv) {
         else if (arg("--fonts")) fonts_dir = argv[++i];
         else if (arg("--screenshot")) screenshot_path = argv[++i];
         else if (arg("--certs")) certs_dir = argv[++i];
+        else if (arg("--serve")) serving = true, serve.port = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--listen-all")) serve.bind = "0.0.0.0";
+        else if (arg("--ui-dir")) serve.ui_dir = argv[++i];
         else usage(argv[0]);
     }
     if (engine_dir.empty() || romfs_dir.empty()) usage(argv[0]);
@@ -123,6 +132,15 @@ int main(int argc, char** argv) {
     if (!fonts_dir.empty() && browser.register_fonts(fonts_dir) == 0) LOG("warning: no fonts registered from %s", fonts_dir.c_str());
     if (!certs_dir.empty() && browser.register_root_cas(certs_dir) == 0) LOG("warning: no root CAs registered from %s", certs_dir.c_str());
     if (!browser.create_view(config)) return 1;
+
+    if (serving) {
+        if (serve.ui_dir.empty()) serve.ui_dir = "frontend";
+        if (!html_path.empty()) browser.load_html(read_file(html_path), "about:blank");
+        serve.start_url = url;
+        serve.user_agent = config.user_agent;
+        serve.core = NXB_CORE;
+        std::_Exit(nxb::run_interactive(browser, serve));  // only returns on failure; skip engine teardown
+    }
 
     if (!url.empty()) browser.load_url(url);
     else browser.load_html(html_path.empty() ? kDefaultHtml : read_file(html_path), "about:blank");

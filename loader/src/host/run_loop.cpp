@@ -74,6 +74,8 @@ bool RunLoop::run_one(std::chrono::steady_clock::time_point until) {
         if (queue_.empty()) return true;
 #else
         if (!ready) return false;
+        woken_ = false;
+        if (queue_.empty()) return true;  // woken without a queued item
 #endif
         item = std::move(queue_.front());
         queue_.pop_front();
@@ -95,6 +97,7 @@ bool RunLoop::run_until(const std::function<bool()>& done, std::chrono::millisec
         auto now = std::chrono::steady_clock::now();
         if (now >= deadline) break;
         run_one(std::min(deadline, now + std::chrono::milliseconds(50)));
+        if (on_iteration) on_iteration();
     }
     return done();
 }

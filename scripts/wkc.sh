@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the loader with the usual arguments filled in. Extra arguments are passed through, e.g.:
 #   scripts/wkc.sh --url https://example.com/ --screenshot out.png --eval document.title
+#   scripts/wkc.sh --serve 8000 [--url https://example.com/]   # then open http://127.0.0.1:8000/
 #
 # Environment:
 #   NXB_CORE     engine generation, 3 (default) or 0
@@ -18,4 +19,5 @@ case "$CORE" in
 esac
 
 exec qemu-aarch64-static "$ROOT/loader/build/wkc-loader-core$CORE" \
-  --engine "$ENGINE_DIR" --romfs "$ENGINE/romfs" --fonts "$ENGINE/fonts" --certs "$ENGINE/certs" "$@"
+  --engine "$ENGINE_DIR" --romfs "$ENGINE/romfs" --fonts "$ENGINE/fonts" --certs "$ENGINE/certs" \
+  --ui-dir "$ROOT/frontend" "$@"

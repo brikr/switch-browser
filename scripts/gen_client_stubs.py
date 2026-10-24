@@ -106,8 +106,15 @@ def emit_method(cls, ret, name, args, const):
     if ret == "void":
         return f"    {sig} {{ {log} }}"
     value = special_returns().get(ret.replace("WKC::", ""), "{}")
+    if ret == "bool" and any(cls == c and name.startswith(prefix) for c, prefix in TRUE_DEFAULTS):
+        value = "true"
     return f"    {sig} {{ {log} return {value}; }}"
 
+
+# Boolean methods that must default to true for the engine to work: the editor's "should..."
+# permission checks (false blocks all text editing). Other interfaces' should* stay false
+# (e.g. ChromeClientIf::shouldInterruptJavaScript).
+TRUE_DEFAULTS = [("EditorClientIf", "should")]
 
 # Return types without a usable default constructor (set per WKC version in main()).
 _special = {}

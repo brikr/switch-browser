@@ -26,6 +26,9 @@ struct ViewEvents {
     std::function<void()> load_finished;
     std::function<void(const std::string& url, const std::string& description)> load_failed;
     std::function<void(const std::string& title)> title_changed;
+    std::function<void(const WKCRect& rect)> repaint;  // area of the view that needs painting
+    std::function<void()> load_started;
+    std::function<void()> location_changed;            // committed load or same-document navigation
 };
 
 std::string to_std(const WKC::String& s);
@@ -47,6 +50,12 @@ public:
     bool canRunBeforeUnloadConfirmPanel() override { return true; }
     bool runBeforeUnloadConfirmPanel(const WKC::String&, WKC::Frame*) override { return true; }
     bool scrollbarsVisible() override { return true; }
+    void repaint(const WKCRect& rect, bool, bool = false, bool = false) override {
+        if (events_.repaint) events_.repaint(rect);
+    }
+    void scroll(const WKCSize&, const WKCRect&, const WKCRect& clipRect) override {
+        if (events_.repaint) events_.repaint(clipRect);
+    }
     unsigned int underlayColor() const override { return 0xFFFFFFFF; }
 
 private:
@@ -105,6 +114,15 @@ public:
     }
 #endif
 
+    void dispatchDidStartProvisionalLoad() override {
+        if (events_.load_started) events_.load_started();
+    }
+    void dispatchDidCommitLoad() override {
+        if (events_.location_changed) events_.location_changed();
+    }
+    void dispatchDidChangeLocationWithinPage() override {
+        if (events_.location_changed) events_.location_changed();
+    }
     void dispatchDidFinishLoad() override;
     void dispatchDidFailLoad(const WKC::ResourceError& e) override;
     void dispatchDidFailProvisionalLoad(const WKC::ResourceError& e) override;
@@ -114,6 +132,13 @@ private:
     WKC::WKCWebFrame* frame_;
     const ViewConfig& config_;
     ViewEvents& events_;
+};
+
+// Turns keyboard events into editing: character input -> Editor::insertText, editing keys ->
+// WebKit editor commands. (WKC leaves this to the embedder, like WebKit's other ports.)
+class HostEditorClient : public WKC::StubEditorClientIf {
+public:
+    void handleKeyboardEvent(WKC::KeyboardEvent* event) override;
 };
 
 // Creates the client objects for each WebView / frame. Every object handed to the engine has its
@@ -139,7 +164,8 @@ public:
     void delete##Name(WKC::Type* c) override { delete static_cast<WKC::Stub##Type*>(c); }
     NXB_STUB_CLIENT(ContextMenuClientIf, ContextMenuClient)
     NXB_STUB_CLIENT(DragClientIf, DragClient)
-    NXB_STUB_CLIENT(EditorClientIf, EditorClient)
+    WKC::EditorClientIf* createEditorClient(WKC::WKCWebView*) override { return gate_vtable(new HostEditorClient()); }
+    void deleteEditorClient(WKC::EditorClientIf* c) override { delete static_cast<HostEditorClient*>(c); }
     NXB_STUB_CLIENT(InspectorClientIf, InspectorClient)
     NXB_STUB_CLIENT(DropDownListClientIf, DropDownListClient)
     NXB_STUB_CLIENT(GeolocationClientIf, GeolocationClient)

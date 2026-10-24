@@ -106,6 +106,7 @@ bool Browser::create_view(const ViewConfig& config) {
     WKCSize size{config.width, config.height};
     bool ok = view_->setOffscreen(WKC::EOffscreenFormatCairo32, bitmap_.data(), config.width * 4, size, size, false);
     LOG("WebView created (%dx%d), setOffscreen -> %s", config.width, config.height, ok ? "ok" : "FAILED");
+    view_->notifyFocusIn();  // the view must have focus to receive keyboard input
     return ok;
 }
 
@@ -195,14 +196,102 @@ int Browser::register_root_cas(const std::string& dir) {
     return count;
 }
 
+// The engine paints only what the page draws; pages without a background would otherwise show
+// whatever the previous page left in the bitmap. Browsers show white there.
+void Browser::clear_bitmap(const WKCRect& r) {
+    for (int y = r.fY; y < r.fY + r.fHeight; y++)
+        std::fill_n(bitmap_.data() + static_cast<size_t>(y) * config_.width + r.fX, r.fWidth, 0xFFFFFFFFu);
+}
+
 bool Browser::screenshot(const std::string& png_path) {
     WKCRect all{0, 0, config_.width, config_.height};
+    clear_bitmap(all);
     view_->notifyPaintOffscreen(all);
     std::vector<uint8_t> rgba(static_cast<size_t>(config_.width) * config_.height * 4);
     cairo_argb32_to_rgba(bitmap_.data(), config_.width, config_.height, config_.width, rgba.data());
     bool ok = write_png(png_path, config_.width, config_.height, rgba.data());
     LOG("screenshot %s -> %s", png_path.c_str(), ok ? "ok" : "FAILED");
     return ok;
+}
+
+void Browser::mouse(MouseKind kind, int x, int y, int button, int mods) {
+    WKCPoint pos{x, y};
+    auto b = static_cast<WKC::MouseButton>(button == 0 ? WKC::EMouseButtonLeft
+                                            : button == 1 ? WKC::EMouseButtonMiddle : WKC::EMouseButtonRight);
+    auto m = static_cast<WKC::Modifier>(mods);
+    switch (kind) {
+        case MouseKind::Down: view_->notifyMouseDown(pos, b, m); break;
+        case MouseKind::Up: view_->notifyMouseUp(pos, b, m); break;
+        case MouseKind::Move: view_->notifyMouseMove(pos, WKC::EMouseButtonNone, m); break;
+        case MouseKind::DoubleClick: view_->notifyMouseDoubleClick(pos, b, m); break;
+    }
+}
+
+void Browser::wheel(int x, int y, float dx, float dy, int mods) {
+    WKCPoint pos{x, y};
+#if NXB_CORE == 3
+    WKCFloatSize diff{dx, dy};
+#else
+    WKCSize diff{static_cast<int>(dx), static_cast<int>(dy)};
+#endif
+    // notifyMouseWheel only dispatches the DOM wheel event (true = the page cancelled it); the
+    // embedder scrolls the view itself, like the Switch applet does for stick/touch input.
+    // WebKit deltas are positive towards the top/left; notifyScroll takes positive = down/right.
+    bool cancelled = view_->notifyMouseWheel(pos, diff, static_cast<WKC::Modifier>(mods));
+    if (!cancelled) view_->notifyScroll(static_cast<int>(-dx), static_cast<int>(-dy));
+    TRACE("wheel(%d,%d d=%.0f,%.0f) cancelled=%d", x, y, dx, dy, cancelled);
+}
+
+void Browser::key(bool down, int key_code, int mods, bool repeat) {
+    auto k = static_cast<WKC::Key>(key_code);
+    auto m = static_cast<WKC::Modifier>(mods);
+#if NXB_CORE == 3
+    bool handled = view_->notifyKeyEvent(down ? WKC::EKeyEventDown : WKC::EKeyEventUp, k, 0, m, repeat);
+    TRACE("key(%s %d) -> %d", down ? "down" : "up", key_code, handled);
+#else
+    if (down) view_->notifyKeyPress(k, m, repeat);
+    else view_->notifyKeyRelease(k, m);
+#endif
+}
+
+void Browser::text(unsigned codepoint) {
+#if NXB_CORE == 3
+    bool handled = view_->notifyKeyEvent(WKC::EKeyEventPress, static_cast<WKC::Key>(0), codepoint, WKC::EModifierNone, false);
+    TRACE("text(%u) -> %d", codepoint, handled);
+#else
+    view_->notifyKeyChar(codepoint);
+#endif
+}
+
+void Browser::go_back_or_forward(int steps) {
+    if (view_->canGoBackOrForward(steps)) view_->goBackOrForward(steps);
+}
+void Browser::reload() { view_->reload(); }
+void Browser::stop() { view_->stopLoading(); }
+
+void Browser::set_device_mode(bool handheld) {
+    config_.handheld = handheld;
+    WKC::WKCWebKitSetDeviceMode(handheld ? WKC::EDeviceModeHandheld : WKC::EDeviceModeConsole);
+    view_->notifyRelayout(true);
+    if (events.repaint) events.repaint(WKCRect{0, 0, config_.width, config_.height});
+}
+
+std::string Browser::current_url() {
+    const char* u = view_->uri();
+    return u ? u : "";
+}
+
+std::vector<uint8_t> Browser::paint_rgba(WKCRect& rect) {
+    int x0 = std::max(0, rect.fX), y0 = std::max(0, rect.fY);
+    int x1 = std::min(config_.width, rect.fX + rect.fWidth), y1 = std::min(config_.height, rect.fY + rect.fHeight);
+    rect = WKCRect{x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0)};
+    std::vector<uint8_t> out(static_cast<size_t>(rect.fWidth) * rect.fHeight * 4);
+    if (out.empty()) return out;
+    clear_bitmap(rect);
+    view_->notifyPaintOffscreen(rect);
+    cairo_argb32_to_rgba(bitmap_.data() + static_cast<size_t>(y0) * config_.width + x0, rect.fWidth, rect.fHeight,
+                         config_.width, out.data());
+    return out;
 }
 
 void Browser::load_html(const std::string& html, const std::string& base_uri) {

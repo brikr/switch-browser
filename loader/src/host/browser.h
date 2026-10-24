@@ -36,11 +36,30 @@ public:
     // Evaluates `script` in the main frame. Returns the result (or exception) converted to a string.
     std::string evaluate(const std::string& script, bool* threw = nullptr);
 
+    // Interactive input (all on the loop thread). Coordinates are view pixels; `mods` uses the
+    // engine's Modifier bits (1 ctrl, 2 shift, 4 alt); `button` 0/1/2 = left/middle/right.
+    enum class MouseKind { Down, Up, Move, DoubleClick };
+    void mouse(MouseKind kind, int x, int y, int button, int mods);
+    void wheel(int x, int y, float dx, float dy, int mods);
+    void key(bool down, int key_code, int mods, bool repeat);  // Windows virtual-key codes
+    void text(unsigned codepoint);                             // character input
+    void go_back_or_forward(int steps);
+    void reload();
+    void stop();
+    void set_device_mode(bool handheld);
+    std::string current_url();
+    // Paints `rect` into the offscreen bitmap and returns it as RGBA8 (rect is clipped to the view).
+    std::vector<uint8_t> paint_rgba(WKCRect& rect);
+    int width() const { return config_.width; }
+    int height() const { return config_.height; }
+
     ViewEvents events;
     WKC::WKCWebView* view() const { return view_; }
     const std::vector<uint32_t>& bitmap() const { return bitmap_; }
 
 private:
+    void clear_bitmap(const WKCRect& r);
+
     MemoryHandler memory_handler_;
 #if NXB_CORE == 0
     TimerHandler timer_handler_;

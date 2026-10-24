@@ -1,0 +1,112 @@
+:root {
+  --bg: #f3f3f5;
+  --panel: #ffffff;
+  --border: #d9d9de;
+  --text: #1d1d22;
+  --muted: #6b6b75;
+  --accent: #e60012;
+  --console-bg: #fbfbfc;
+  --warn: #9a6700;
+  --error: #c62828;
+  --ok: #2e7d32;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1f;
+    --panel: #26262b;
+    --border: #3a3a41;
+    --text: #ececf0;
+    --muted: #a0a0aa;
+    --console-bg: #202024;
+    --warn: #e3b341;
+    --error: #ff6b6b;
+    --ok: #6fcf73;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+button {
+  font: inherit; color: var(--text); background: transparent;
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+button:hover { background: var(--bg); }
+button:disabled { opacity: .4; cursor: default; }
+.toolbar > button:nth-child(-n+3) { width: 32px; padding: 5px 0; font-size: 15px; }
+.address { flex: 1; min-width: 0; }
+.address input {
+  width: 100%; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+.address input:focus, .eval input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.segmented { display: flex; }
+.segmented button { border-radius: 0; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+.segmented button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* The stage is a size container so the 16:9 screen can be fitted to whichever of its width or
+   height is the limit, instead of guessing how much room the toolbar and console take. */
+.stage {
+  flex: 1; min-height: 0; overflow: hidden; padding: 12px;
+  display: flex; align-items: center; justify-content: center;
+  container-type: size;
+}
+.screen-wrap {
+  position: relative; flex: none;
+  width: min(100cqw, 100cqh * 16 / 9); aspect-ratio: 16 / 9;
+  box-shadow: 0 2px 12px rgba(0,0,0,.25); background: #000;
+}
+#screen { display: block; width: 100%; height: 100%; image-rendering: auto; cursor: default; }
+#screen:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 15px; pointer-events: none;
+}
+.overlay[hidden] { display: none; }
+
+.console {
+  height: 180px; display: flex; flex-direction: column;
+  background: var(--console-bg); border-top: 1px solid var(--border);
+}
+.console[hidden] { display: none; }
+.log {
+  flex: 1; overflow: auto; padding: 6px 10px;
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word;
+}
+.log .entry { padding: 1px 0; border-bottom: 1px solid var(--border); }
+.log .warn { color: var(--warn); }
+.log .error { color: var(--error); }
+.log .result { color: var(--muted); }
+.log .src { color: var(--muted); float: right; margin-left: 12px; }
+.eval { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-top: 1px solid var(--border); }
+.eval .prompt { color: var(--accent); font-family: ui-monospace, monospace; }
+.eval input {
+  flex: 1; font: 12px ui-monospace, "Cascadia Mono", Menlo, monospace; color: var(--text);
+  background: transparent; border: none; padding: 4px;
+}
+
+.status {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px;
+}
+.status .spacer { flex: 1; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+.dot.connected { background: var(--ok); }
+.dot.loading { background: var(--warn); }
+#engine { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+
+@media (max-width: 640px) {
+  .toolbar { flex-wrap: wrap; }
+  .address { order: 10; flex-basis: 100%; }
+}

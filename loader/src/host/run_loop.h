@@ -28,6 +28,9 @@ public:
     void post(std::function<void()> task);
     void wake();
 
+    // Called on the loop thread after every iteration (used by the interactive UI to push frames).
+    std::function<void()> on_iteration;
+
     // Runs until `done()` returns true or `timeout` passes. Returns done().
     bool run_until(const std::function<bool()>& done, std::chrono::milliseconds timeout);
     // Runs until nothing happens for `idle`, or `timeout` passes.
